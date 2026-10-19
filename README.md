@@ -37,7 +37,7 @@ s
 
    Keep `.env` private; it is excluded from Git.
 
-3. In the Developer Portal, enable the **bot** and **applications.commands** scopes when generating an invite link. Invite the bot to your server and grant only the permissions it needs. Moderation commands require the bot to have the corresponding server permission.
+3. In the Developer Portal, enable the **bot** and **applications.commands** scopes when generating an invite link. Invite the bot to your server and grant only the permissions it needs. Moderation commands require the bot to have the corresponding server permission. Enabling administrator is recommended for permissions.
 
 4. Start the bot:
 
