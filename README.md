@@ -12,7 +12,7 @@ A fast, configurable Discord bot for server moderation and a few lightweight fun
 Open the `DiscordBot` project folder in your editor, then run the commands below from its integrated terminal. If your terminal prompt is in `C:\Windows\System32`, change to the folder where you saved the project first; npm must be run in the folder containing `package.json`.
 
 Simplified: Make a brand new folder on your computer outside of the zip file, right click the zip file then click extract all, browse files and click on the empty folder you made on your computer then click confirm. 
-
+Please note: This is only for setting up, not to enable the permissions.
 Secondly, open the file, go to address bar and type cmd then hit enter. (Terminal should open.) Type `npm install` in the terminal and hit enter. 
 
 Third: Rename `.env.example` to `.env` please click confirm if a warning shows up that is completely fine. 
