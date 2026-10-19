@@ -17,7 +17,9 @@ Secondly, open the file, go to address bar and type cmd then hit enter. (Termina
 
 Third: Rename `.env.example` to `.env` please click confirm if a warning shows up that is completely fine. 
 
-Fourth, open the `.env` and enter your token and client id, guild_id iis optional. (Remember to hit save!!) Finally, type `npm start` in terminal and hit enter, the bot should go online. <img width="1200" height="540" alt="image" src="https://github.com/user-attachments/assets/2bcf94be-7597-4063-82c5-866c8a6a7747" />
+Fourth, open the `.env` and enter your token and client id, guild_id iis optional. (Remember to hit save!!) Finally, type `npm start` in terminal and hit enter, the bot should go online. Note: Enabling guild_id is recommended if you are using this for one server.
+
+<img width="1200" height="540" alt="image" src="https://github.com/user-attachments/assets/2bcf94be-7597-4063-82c5-866c8a6a7747" />
 
 
 1. Install dependencies:
@@ -46,6 +48,23 @@ s
    ```
 
    The bot registers its slash commands on startup. Set `DISCORD_GUILD_ID` while developing to register commands in one server, where updates are available quickly. Leave it unset to register commands globally; global updates may take some time to propagate.
+## All permissions
+Recommended: Administrator to enable everything quicker.
+Need:
+- kick user
+- ban users
+- send messages
+- view channel
+- manage channel
+- manage messages
+- moderate members
+- manage roles
+- manage nicknames
+- create instant invite
+- move members
+- view audit log
+------------------------------------------------------------------------------------------------------------------ 
+   
 
 ## Commands
 
@@ -91,3 +110,4 @@ s
 | `/purgebots amount` | Remove recent bot messages from this channel | Manage Messages |
 
 All moderation commands are restricted to servers. The bot checks the invoking member's permission, and Discord also enforces the command's configured default permission.
+
