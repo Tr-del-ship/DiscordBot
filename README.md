@@ -4,7 +4,7 @@ A fast, configurable Discord bot for server moderation and a few lightweight fun
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 20 or newer [Node.js install](https://nodejs.org/en)
 - A Discord application and bot created in the [Discord Developer Portal](https://discord.com/developers/applications)
 
 ## Setup
