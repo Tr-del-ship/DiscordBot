@@ -14,7 +14,7 @@ Open the `DiscordBot` project folder in your editor, then run the commands below
 Simplified: Make a brand new folder on your computer outside of the zip file, right click the zip file then click extract all, browse files and click on the empty folder you made on your computer then click confirm. 
 Secondly, open the file, go to address bar and type cmd then hit enter. (Terminal should open.) Type `npm install` in the terminal and hit enter. 
 Third: Rename `.env.example` to `.env` please click confirm if a warning shows up that is completely fine. 
-Fourth, open the `.env` and enter your token and client id, guild_id iis optional. (Remember to hit save!!) Finally, type `npm start` in terminal and hit enter, the bot should go online. <img width="880" height="592" alt="image" src="https://github.com/user-attachments/assets/2bcf94be-7597-4063-82c5-866c8a6a7747" />
+Fourth, open the `.env` and enter your token and client id, guild_id iis optional. (Remember to hit save!!) Finally, type `npm start` in terminal and hit enter, the bot should go online. <img width="1200" height="540" alt="image" src="https://github.com/user-attachments/assets/2bcf94be-7597-4063-82c5-866c8a6a7747" />
 
 
 1. Install dependencies:
