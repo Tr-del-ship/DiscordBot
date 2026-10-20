@@ -116,5 +116,13 @@ All moderation commands are restricted to servers. The bot checks the invoking m
 Last updated 10/20/26 12:27 PM.
 ## Extra Information
 
-What to know: A ton more commands coming next month such as, '/createlogchannel'.
+Some commands are easily configurable like eightball in fun.json.
+What to know: A ton more commands coming next month such as, '/createlogchannel' and many more!
+- `/createlogchannel` will allow a user to pick a channel that exists in the server which will show all moderation commands like /warn into that specific channel. Fun commands like ping, eightball, coinflip and other ones that may be considered fun will not show up in the channel.
+
+### Configurations & Additions to Existing Commands 
+- Commands like `userinfo` will show all the roles that the user currently has.
+- Fix the /warn bug. (Ability to warn yourself.) There will also be some additional restrictions to the warn command like the abilty to warn roles that have a higher ranking than them.
+- Instead of `clearwarnings` clearing ALL warnings, it will present all warnings they have at the moment and give mods the ability to clear one specific warning.
+- Removing the ability to use ALL moderation commands on yourself.
 
