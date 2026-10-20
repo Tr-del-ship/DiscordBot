@@ -56,7 +56,7 @@ s
 
    The bot registers its slash commands on startup. Set `DISCORD_GUILD_ID` while developing to register commands in one server, where updates are available quickly. Leave it unset to register commands globally; global updates may take some time to propagate.
 ## All permissions
-Recommended: Administrator to enable everything quicker.
+I recommend not enabling administrative perms to the bot to prevent large scale attacks and whatnot.
 Need:
 - kick user
 - ban users
@@ -126,13 +126,21 @@ Some commands are easily configurable like eightball in fun.json.
 What to know: A lot more commands coming next month such as, '/createlogchannel' and many more!
 - `/createlogchannel` will allow a user to pick a channel that exists in the server which will show all moderation commands like /warn into that specific channel. Fun commands like ping, eightball, coinflip and other ones that may be considered fun will not show up in the channel.
 
-### Configurations & Additions to Existing Commands 
+## Looking Towards The Future
 - Commands like `userinfo` will show all the roles that the user currently has also including, join date, server join date and infractions like warnings, kicks and bans.
 - `serverinfo` will present more things about the server like the server description.
 - Fix the /warn bug. (Ability to warn yourself.) There will also be some additional restrictions to the warn command like the abilty to warn roles that have a higher ranking than them.
 - Instead of `clearwarnings` clearing ALL warnings, it will present all warnings they have at the moment and give mods the ability to clear one specific warning.
 - Removing the ability to use ALL moderation commands on yourself.
 - If there are updates available, some text will appear in the terminal that the bot is running on saying "Update available for the bot, please refer to [DiscordBot Install](https://github.com/Tr-del-ship/DiscordBot/tree/codespace-refactored-engine-4qw4pwjp4grq3j6qv)."
+
+### Future Security Updates
+- restricting dangerous commands: Locking owner only or high privilege administrative commands behind checks like `@command.is_owner()` 
+- Sanitizing inputs and/or URLs to prevent injections attacks and `SSRF`. (Server-Side-Request-Forgery)
+- Cooldown of 1-3 seconds for each command.
+- Moderation action log. (stated above.)
+- Hierarchy checks: Makes sure that low rank mods can not full fill a request of kicking, or banning and other high risk commands.
+And maybe more!
 
 
 Last updated 10/20/26 1:19 PM.
