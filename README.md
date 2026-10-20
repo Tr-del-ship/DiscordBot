@@ -132,7 +132,7 @@ What to know: A lot more commands coming next month such as, '/createlogchannel'
 - Fix the /warn bug. (Ability to warn yourself.) There will also be some additional restrictions to the warn command like the abilty to warn roles that have a higher ranking than them.
 - Instead of `clearwarnings` clearing ALL warnings, it will present all warnings they have at the moment and give mods the ability to clear one specific warning.
 - Removing the ability to use ALL moderation commands on yourself.
-- If there are updates available, some text will appear in the terminal that the bot is running on saying "Update available for the bot, please refer to [DiscordBot Install](https://github.com/Tr-del-ship/DiscordBot/tree/codespace-refactored-engine-4qw4pwjp4grq3j6qv)"
+- If there are updates available, some text will appear in the terminal that the bot is running on saying "Update available for the bot, please refer to [DiscordBot Install](https://github.com/Tr-del-ship/DiscordBot/tree/codespace-refactored-engine-4qw4pwjp4grq3j6qv)."
 
 
 Last updated 10/20/26 1:19 PM.
