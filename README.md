@@ -113,7 +113,6 @@ Need:
 All moderation commands are restricted to servers. The bot checks the invoking member's permission, and Discord also enforces the command's configured default permission.
 
 
-Last updated 10/20/26 1:19 PM.
 ## Extra Information
 
 Some commands are easily configurable like eightball in fun.json.
@@ -127,3 +126,5 @@ What to know: A lot more commands coming next month such as, '/createlogchannel'
 - Instead of `clearwarnings` clearing ALL warnings, it will present all warnings they have at the moment and give mods the ability to clear one specific warning.
 - Removing the ability to use ALL moderation commands on yourself.
 
+
+Last updated 10/20/26 1:19 PM.
