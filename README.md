@@ -124,7 +124,7 @@ All moderation commands are restricted to servers. The bot checks the invoking m
 
 Some commands are easily configurable like eightball in fun.json.
 What to know: A lot more commands coming next month such as, '/createlogchannel' and many more!
-- `/createlogchannel` will allow a user to pick a channel that exists in the server which will show all moderation commands like /warn into that specific channel. Fun commands like ping, eightball, coinflip and other ones that may be considered fun will not show up in the channel.
+- `/createlogchannel` will allow a user to pick a channel that exists in the server which will show all moderation commands like /warn into that specific channel. Fun commands like ping, eightball, coinflip and other ones that may be considered fun will not show up in the channel. Simplified: Shows all moderation actions taken against users like /warn, /purge, /cleanup and whatnot.
 
 ## Looking Towards The Future
 - Commands like `userinfo` will show all the roles that the user currently has also including, join date, server join date and infractions like warnings, kicks and bans.
