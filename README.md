@@ -63,6 +63,7 @@ Need:
 - create instant invite
 - move members
 - view audit log
++ More permissions may be required soon!
 ------------------------------------------------------------------------------------------------------------------ 
    
 
