@@ -112,3 +112,9 @@ Need:
 
 All moderation commands are restricted to servers. The bot checks the invoking member's permission, and Discord also enforces the command's configured default permission.
 
+
+Last updated 10/20/26 12:27 PM.
+## Extra Information
+
+What to know: A ton more commands coming next month such as, '/createlogchannel'.
+
