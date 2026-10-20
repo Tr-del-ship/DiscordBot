@@ -7,6 +7,13 @@ A fast, configurable Discord bot for server moderation and a few lightweight fun
 - Node.js 20 or newer [Node.js install](https://nodejs.org/en)
 - A Discord application and bot created in the [Discord Developer Portal](https://discord.com/developers/applications)
 
+Supported security versions of the bot: 
+| Version | Supported          |
+| ------- | ------------------ |
+| v1.1.0   | :white_check_mark: |
+| N/A   | :x:                |
+| N/A   | :x: |
+| N/A   | :x:                |
 ## Setup
 
 Open the `DiscordBot` project folder in your editor, then run the commands below from its integrated terminal. If your terminal prompt is in `C:\Windows\System32`, change to the folder where you saved the project first; npm must be run in the folder containing `package.json`.
