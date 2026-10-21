@@ -19,3 +19,5 @@ No data is shared with third parties by the bot software. All data transmission 
 
 User Rights
 Users who wish to have their data removed should contact the administrator of the specific Discord server hosting the bot instance, as the bot creator does not control or store any server data.
+
+License: [LICENSE.md](https://github.com/Tr-del-ship/DiscordBot/tree/codespace-refactored-engine-4qw4pwjp4grq3j6qv?tab=License-1-ov-file)
