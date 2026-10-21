@@ -128,19 +128,24 @@ I get an error when running npm install or npm start. What am I doing wrong?
 Ensure your terminal prompt path matches your project folder (where package.json is located). If your terminal says `C:\Windows\System32`, you need to switch folders first. Follow the simplified setup steps to open cmd directly inside your extracted project folder.
 
 The bot is online, but commands say "Interaction Failed" or do nothing.
+
 Make sure you checked the applications.commands scope alongside the bot scope when generating your bot's invite link in the Discord Developer Portal. This may be also because you did not wait for the bot to fully startup or it is offline.
 
 
 What makes this bot better than Dyno?
+
 This bot is built from the ground up using Node.js 20 and modern discord.js architecture. It runs completely lightweight, registers native Discord slash commands for rapid performance, and packs a massive suite of built-in utility, moderation, and cleanup commands without locking features behind a paywall.
 
 My computer says `npm is not recognized as an internal or external command.` How do I fix it?
+
 This means Node.js is either not installed or your system's environment variables haven't updated. Ensure you have installed Node.js 20 or newer. If you just installed it, restart your terminal or restart your computer for the change to take effect.
 
 Why does the bot keep crashing with TokenInvalid?
+
 Double-check your `.env` file. Make sure your `DISCORD_TOKEN` contains only the token string without quotation marks, spaces, or brackets around it. Also, make sure you didn't accidentally copy your Client Secret instead of your Bot Token.
 
 Why am I getting a `Disallowed Intents error` on startup?
+
 Your bot code requires permission to read server data (like tracking member joins or text moderation). Go to the [Discord Developer Portal](https://discord.com/developers/applications), click on your application, open the Bot tab on the left sidebar, scroll down to `Privileged Gateway Intents`, and toggle on the intents your bot needs (such as `Guild Members` or `Message Content`). Remember to save changes!
 
 
