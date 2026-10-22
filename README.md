@@ -167,12 +167,26 @@ Your bot code requires permission to read server data (like tracking member join
 A lot more commands coming next month such as, `/createlogchannel` and many more!
 
 - `/createlogchannel` will allow a user to pick a channel that exists in the server which will show all moderation commands like /warn into that specific channel. Fun commands like ping, eightball, coinflip and other ones that may be considered fun will not show up in the channel. Simplified: Shows all moderation actions taken against users like /warn, /purge, /cleanup and whatnot.
+
+
 - `/audit` Queries your bot's database for deleted or edited messages matching a specific phrase or user ID. This allows staff to catch someone who posted a scam link or racial slur and immediately deleted it before anyone saw it.
+
+
 - `/cleanuplogs <days>` This command securely prunes your bot's database logs older than a specific date (e.g., deleting message edits older than 30 days) to keep your hosting storage low and optimize query speeds, while retaining permanent records of bans/warns/kicks.
+
+
 - `/whois <user_id>` What it does: Fetches deep metadata about a target user. It shouldn't just show their avatar, it should display their exact account creation date, when they joined the guild, a list of mutual servers (if your bot is in multiple guilds), and a calculated "Risk Score" based on account age and profile traits.
+
+
 - `/embedcreate` Gives the ability to make embeds freely.
+
+
 - `/moderatorperm` This command gives one or more people the ability to use moderator commands like /warn. 
+
+
 - `/dm` Direct messages a user. Moderator Command.
+
+
 - `/message` Makes the bot send a message of any kind that you inputted. Moderator Command
 
 
