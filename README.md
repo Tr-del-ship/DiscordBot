@@ -161,6 +161,7 @@ Your bot code requires permission to read server data (like tracking member join
 - Instead of `clearwarnings` clearing ALL warnings, it will present all warnings they have at the moment and give mods the ability to clear one specific warning.
 - Removing the ability to use ALL moderation commands on yourself.
 - If there are updates available, some text will appear in the terminal that the bot is running on saying "Update available for the bot, please refer to [DiscordBot Install](https://github.com/Tr-del-ship/DiscordBot/tree/codespace-refactored-engine-4qw4pwjp4grq3j6qv)."
+- Built in Ticketing system like the Tickety bot on discord.
 
 ### Commmands
 A lot more commands coming next month such as, `/createlogchannel` and many more!
@@ -169,8 +170,11 @@ A lot more commands coming next month such as, `/createlogchannel` and many more
 - `/audit` Queries your bot's database for deleted or edited messages matching a specific phrase or user ID. This allows staff to catch someone who posted a scam link or racial slur and immediately deleted it before anyone saw it.
 - `/cleanuplogs <days>` This command securely prunes your bot's database logs older than a specific date (e.g., deleting message edits older than 30 days) to keep your hosting storage low and optimize query speeds, while retaining permanent records of bans/warns/kicks.
 - `/whois <user_id>` What it does: Fetches deep metadata about a target user. It shouldn't just show their avatar, it should display their exact account creation date, when they joined the guild, a list of mutual servers (if your bot is in multiple guilds), and a calculated "Risk Score" based on account age and profile traits.
-- `/embedcreate` This is self explanatory.
-- `/moderatorperm` This command gives one or more people the ability to use moderator commands like /warn.
+- `/embedcreate` Gives the ability to make embeds freely.
+- `/moderatorperm` This command gives one or more people the ability to use moderator commands like /warn. 
+- `/dm` Direct messages a user. Moderator Command.
+- `/message` Makes the bot send a message of any kind that you inputted. Moderator Command
+
 
 ### Future Security Updates
 - restricting dangerous commands: Locking owner only or high privilege administrative commands behind checks like `@command.is_owner()` 
@@ -181,4 +185,4 @@ A lot more commands coming next month such as, `/createlogchannel` and many more
 And maybe more!
 
 
-Last updated 10/22/26 1:15 PM.
+Last updated 10/22/26 1:23 PM.
