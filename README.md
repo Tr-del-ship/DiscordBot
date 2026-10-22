@@ -25,6 +25,7 @@ Secondly, open the file, go to address bar and type cmd then hit enter. (Termina
 Third: Rename `.env.example` to `.env` please click confirm if a warning shows up that is completely fine. 
 
 Fourth, open the `.env` and enter your token and client id, guild_id is optional. (Remember to hit save!!) Finally, type `npm start` in terminal and hit enter, the bot should go online. Note: Enabling guild_id is recommended if you are using this for one server.
+Please view [Bot Permissions](https://github.com/Tr-del-ship/DiscordBot/blob/codespace-refactored-engine-4qw4pwjp4grq3j6qv/README.md#commands) to get your entire list of perms.
 
 <img width="1200" height="540" alt="image" src="https://github.com/user-attachments/assets/2bcf94be-7597-4063-82c5-866c8a6a7747" />
 
