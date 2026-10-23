@@ -37,7 +37,7 @@ Please view [Bot Permissions](https://github.com/Tr-del-ship/DiscordBot/blob/cod
    ```
 
 2. rename `.env.example` to `.env` and fill in the bot token and application ID:
-s
+
    ```env
    DISCORD_TOKEN=your_bot_token
    CLIENT_ID=your_application_id
@@ -128,7 +128,7 @@ Need:
 | `/ticket` | Create a private support channel | None |
 | `/closeticket` | Close a ticket you opened (or manage as a channel moderator) | Ticket opener or Manage Channels |
 
-All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. The bot stores warnings, moderation action records, log-channel settings, moderator-role settings, and (when enabled) edited/deleted message content locally in `data/bot-data.json`.
+All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. The bot stores warnings, moderation action records, temporary-ban expiry times, log-channel settings, moderator-role settings, and (when enabled) edited/deleted message content locally in `data/bot-data.json`. Expired temporary bans are processed after restart as well as while the bot is running.
 
 
 ## Frequently Asked Questions

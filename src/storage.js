@@ -40,14 +40,14 @@ async function getState() {
 }
 
 function guildData(state, guildId) {
-  state.guilds[guildId] ??= {
-    warnings: {},
-    logChannelId: null,
-    actions: [],
-    audit: [],
-    moderatorRoleIds: [],
-  };
-  return state.guilds[guildId];
+  const guild = state.guilds[guildId] ??= {};
+  guild.warnings ??= {};
+  guild.logChannelId ??= null;
+  guild.actions ??= [];
+  guild.audit ??= [];
+  guild.moderatorRoleIds ??= [];
+  guild.temporaryBans ??= {};
+  return guild;
 }
 
 async function updateGuild(guildId, update) {
@@ -160,6 +160,27 @@ export async function getModerationActions(guildId, userId) {
   const state = await getState();
   return guildData(state, guildId).actions.filter(
     (action) => action.targetId === userId,
+  );
+}
+
+export async function setTemporaryBan(guildId, userId, expiresAt) {
+  await updateGuild(guildId, (guild) => {
+    guild.temporaryBans[userId] = expiresAt;
+  });
+}
+
+export async function removeTemporaryBan(guildId, userId) {
+  await updateGuild(guildId, (guild) => {
+    delete guild.temporaryBans[userId];
+  });
+}
+
+export async function getTemporaryBans() {
+  const state = await getState();
+  return Object.entries(state.guilds).flatMap(([guildId, guild]) =>
+    Object.entries(guild.temporaryBans ?? {})
+      .filter(([, expiresAt]) => Number.isFinite(expiresAt))
+      .map(([userId, expiresAt]) => ({ guildId, userId, expiresAt })),
   );
 }
 

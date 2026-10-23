@@ -38,9 +38,10 @@ export const funCommands = [
     async execute(interaction) {
       const answer =
         eightBallAnswers[Math.floor(Math.random() * eightBallAnswers.length)];
-      await interaction.reply(
-        `🎱 **${interaction.options.getString("question", true)}**\n${answer}`,
-      );
+      await interaction.reply({
+        content: `🎱 **${interaction.options.getString("question", true)}**\n${answer}`,
+        allowedMentions: { parse: [] },
+      });
     },
   },
   {

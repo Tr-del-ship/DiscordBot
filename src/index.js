@@ -8,6 +8,7 @@ import {
 } from "discord.js";
 import { funCommands } from "./commands/fun.js";
 import {
+  configureMutedRoleForChannel,
   checkModerationTarget,
   moderationCommands,
 } from "./commands/moderation.js";
@@ -15,7 +16,9 @@ import {
   addAuditEvent,
   addModerationAction,
   getLogChannelId,
+  getTemporaryBans,
   initializeStorage,
+  removeTemporaryBan,
 } from "./storage.js";
 
 const commands = [...funCommands, ...moderationCommands];
@@ -186,6 +189,28 @@ async function captureMessageAudit(
   });
 }
 
+async function expireTemporaryBans(client) {
+  const temporaryBans = await getTemporaryBans();
+  for (const { guildId, userId, expiresAt } of temporaryBans) {
+    if (expiresAt > Date.now()) continue;
+    try {
+      const guild =
+        client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
+      await guild.members.unban(userId, "Temporary ban expired");
+      await removeTemporaryBan(guildId, userId);
+    } catch (error) {
+      if (error.code === 10004 || error.code === 10026) {
+        await removeTemporaryBan(guildId, userId);
+      } else {
+        console.error(
+          `Unable to expire temporary ban for ${userId} in guild ${guildId}:`,
+          error,
+        );
+      }
+    }
+  }
+}
+
 async function main() {
   const config = readConfig();
   const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
@@ -194,6 +219,12 @@ async function main() {
 
   client.on("error", (error) => {
     console.error("Discord client error:", error);
+  });
+
+  client.on("channelCreate", (channel) => {
+    configureMutedRoleForChannel(channel).catch((error) => {
+      console.error(`Unable to apply muted-role permissions to channel ${channel.id}:`, error);
+    });
   });
 
   client.on("interactionCreate", async (interaction) => {
@@ -263,6 +294,21 @@ async function main() {
 
   client.once("ready", () => {
     console.info(`Logged in as ${client.user.tag}.`);
+    let processingTemporaryBans = false;
+    const expireBans = () => {
+      if (processingTemporaryBans) return;
+      processingTemporaryBans = true;
+      expireTemporaryBans(client)
+        .catch((error) => {
+          console.error("Unable to process temporary bans:", error);
+        })
+        .finally(() => {
+          processingTemporaryBans = false;
+        });
+    };
+    expireBans();
+    const timer = setInterval(expireBans, 60_000);
+    timer.unref();
   });
 
   try {

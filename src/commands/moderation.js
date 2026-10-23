@@ -11,13 +11,16 @@ import {
   hasModeratorRole,
   pruneAudit,
   removeWarning,
+  removeTemporaryBan,
   searchAudit,
   setLogChannel,
   setModeratorRole,
+  setTemporaryBan,
 } from "../storage.js";
 
 const messageAuditEnabled =
   process.env.ENABLE_MESSAGE_AUDIT?.toLowerCase() === "true";
+const moderatorRoleCommands = new Set(["warn", "warnings", "clearwarnings"]);
 
 async function requireGuild(interaction) {
   if (interaction.guild) return true;
@@ -32,6 +35,7 @@ async function requireGuild(interaction) {
 async function requirePermission(interaction, permission, label) {
   if (interaction.memberPermissions?.has(permission)) return true;
   if (
+    moderatorRoleCommands.has(interaction.commandName) &&
     permission === PermissionFlagsBits.ModerateMembers &&
     interaction.guild
   ) {
@@ -62,32 +66,51 @@ async function fetchMember(interaction, user) {
   }
 }
 
+async function configureMutedRoleChannel(channel, role) {
+  if (
+    (!channel.isTextBased() && !channel.isVoiceBased()) ||
+    !channel.permissionOverwrites
+  ) {
+    return;
+  }
+
+  const overwrite = channel.permissionOverwrites.cache.get(role.id);
+  const permissions = {
+    SendMessages: false,
+    SendMessagesInThreads: false,
+    AddReactions: false,
+    Speak: false,
+    Stream: false,
+  };
+  if (overwrite?.allow.has(PermissionFlagsBits.ViewChannel)) {
+    permissions.ViewChannel = null;
+  }
+  await channel.permissionOverwrites.edit(role, permissions);
+}
+
+export async function configureMutedRoleForChannel(channel) {
+  if (!channel.guild) return;
+  const role = channel.guild.roles.cache.find(
+    (candidate) => candidate.name.toLowerCase() === "muted",
+  );
+  if (role) await configureMutedRoleChannel(channel, role);
+}
+
 async function ensureMutedRole(guild) {
   const existing = guild.roles.cache.find(
     (role) => role.name.toLowerCase() === "muted",
   );
-  if (existing) return existing;
-
-  const created = await guild.roles.create({
+  const mutedRole = existing ?? await guild.roles.create({
     name: "Muted",
     color: 0x808080,
     reason: "Create a moderation role for muting members.",
   });
 
   for (const channel of guild.channels.cache.values()) {
-    if (!channel.isTextBased() && !channel.isVoiceBased()) continue;
-
-    await channel.permissionOverwrites.edit(created, {
-      SendMessages: false,
-      SendMessagesInThreads: false,
-      AddReactions: false,
-      Speak: false,
-      Stream: false,
-      ViewChannel: true,
-    });
+    await configureMutedRoleChannel(channel, mutedRole);
   }
 
-  return created;
+  return mutedRole;
 }
 
 function formatDuration(totalMinutes) {
@@ -121,6 +144,23 @@ const actionCommands = new Set([
   "cleanup",
 ]);
 
+const botHierarchyCommands = new Set([
+  "kick",
+  "ban",
+  "timeout",
+  "untimeout",
+  "mute",
+  "unmute",
+  "deafen",
+  "undeafen",
+  "addrole",
+  "removerole",
+  "setnickname",
+  "resetnickname",
+  "softban",
+  "tempban",
+]);
+
 export async function checkModerationTarget(interaction) {
   if (!actionCommands.has(interaction.commandName)) return true;
 
@@ -143,6 +183,7 @@ export async function checkModerationTarget(interaction) {
   ]);
   if (!target) return true;
 
+  const botMustOutrankTarget = botHierarchyCommands.has(interaction.commandName);
   const isOwner = interaction.user.id === guild.ownerId;
   if (
     !isOwner &&
@@ -169,8 +210,9 @@ export async function checkModerationTarget(interaction) {
     return false;
   }
   if (
-    target.id === botMember.id ||
-    botMember.roles.highest.comparePositionTo(target.roles.highest) <= 0
+    botMustOutrankTarget &&
+    (target.id === botMember.id ||
+      botMember.roles.highest.comparePositionTo(target.roles.highest) <= 0)
   ) {
     await interaction.reply({
       content: "The bot's highest role must be above the target's highest role.",
@@ -208,6 +250,22 @@ export const moderationCommands = [
       }
 
       const channel = interaction.options.getChannel("channel", true);
+      const botMember =
+        interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+      const botPermissions = channel.permissionsFor(botMember);
+      if (
+        !botPermissions?.has([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks,
+        ])
+      ) {
+        await interaction.reply({
+          content: "The bot needs View Channel, Send Messages, and Embed Links in that channel before it can log there.",
+          ephemeral: true,
+        });
+        return;
+      }
       await setLogChannel(interaction.guild.id, channel.id);
       await interaction.reply({
         content: messageAuditEnabled
@@ -379,6 +437,7 @@ export const moderationCommands = [
       await interaction.reply({
         content: `${enabled ? "Granted" : "Revoked"} /warn, /warnings, and /clearwarnings access for **${role.name}**.`,
         ephemeral: true,
+        allowedMentions: { parse: [] },
       });
     },
   },
@@ -734,7 +793,9 @@ export const moderationCommands = [
           allowedMentions: { parse: [] },
         });
       } catch (error) {
-        if (error.code !== 50007) throw error;
+        if (error.code !== 50007) {
+          console.error(`Unable to send warning DM to ${user.id}:`, error);
+        }
       }
       await interaction.reply({
         content: `⚠️ Warned **${user.tag}** for: ${reason} (warning ID: \`${warning.id}\`).`,
@@ -1209,6 +1270,7 @@ export const moderationCommands = [
       await interaction.reply({
         content: `Set **${user.tag}**'s nickname to **${nickname}**.`,
         ephemeral: false,
+        allowedMentions: { parse: [] },
       });
     },
   },
@@ -1541,17 +1603,30 @@ export const moderationCommands = [
       const user = interaction.options.getUser("user", true);
       const minutes = interaction.options.getInteger("minutes", true);
       const reason = interaction.options.getString("reason") ?? "Temporary ban";
-      await interaction.guild.members.ban(user, {
-        deleteMessageSeconds: 60 * 60 * 24,
-        reason,
-      });
-      setTimeout(() => {
-        interaction.guild.members
-          .unban(user)
-          .catch((error) =>
-            console.error(`Unable to unban ${user.id} after temporary ban:`, error),
-          );
-      }, minutes * 60_000);
+      const alreadyBanned = await interaction.guild.bans.fetch({ user: user.id })
+        .catch((error) => {
+          if (error.code === 10026) return null;
+          throw error;
+        });
+      if (alreadyBanned) {
+        await interaction.reply({
+          content: "That user is already banned from this server.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const expiresAt = Date.now() + minutes * 60_000;
+      await setTemporaryBan(interaction.guild.id, user.id, expiresAt);
+      try {
+        await interaction.guild.members.ban(user, {
+          deleteMessageSeconds: 60 * 60 * 24,
+          reason,
+        });
+      } catch (error) {
+        await removeTemporaryBan(interaction.guild.id, user.id);
+        throw error;
+      }
       await interaction.reply({
         content: `⏲️ Temporarily banned **${user.tag}** for ${formatDuration(minutes)}.`,
         ephemeral: false,
@@ -1614,11 +1689,15 @@ export const moderationCommands = [
 
       const bans = await interaction.guild.bans.fetch();
       const entries = bans.size
-        ? [...bans.values()].slice(0, 10).map((ban) => `${ban.user.tag} — ${ban.reason ?? "No reason provided"}`).join("\n")
+        ? [...bans.values()]
+            .slice(0, 10)
+            .map((ban) => `${ban.user.tag} — ${(ban.reason ?? "No reason provided").slice(0, 120)}`)
+            .join("\n")
         : "No users are currently banned.";
       await interaction.reply({
         content: `**Ban list**\n${entries}`,
         ephemeral: false,
+        allowedMentions: { parse: [] },
       });
     },
   },
@@ -1803,6 +1882,7 @@ export const moderationCommands = [
       await interaction.reply({
         content: `✅ Created **#${channel.name}**.`,
         ephemeral: false,
+        allowedMentions: { parse: [] },
       });
     },
   },
@@ -1975,7 +2055,7 @@ export const moderationCommands = [
       const amount = interaction.options.getInteger("amount", true);
       const messages = await channel.messages.fetch({ limit: 100 });
       const matching = messages.filter((message) => message.author.id === user.id).first(amount);
-      if (!matching.size) {
+      if (!matching.length) {
         await interaction.reply({
           content: `No recent messages from **${user.tag}** were found in this channel.`,
           ephemeral: true,
@@ -1985,8 +2065,9 @@ export const moderationCommands = [
 
       await channel.bulkDelete(matching, true);
       await interaction.reply({
-        content: `🧹 Deleted ${matching.size} message${matching.size === 1 ? "" : "s"} from **${user.tag}**.`,
+        content: `🧹 Deleted ${matching.length} message${matching.length === 1 ? "" : "s"} from **${user.tag}**.`,
         ephemeral: false,
+        allowedMentions: { parse: [] },
       });
     },
   },
@@ -2026,7 +2107,7 @@ export const moderationCommands = [
 
       const messages = await channel.messages.fetch({ limit: 100 });
       const botMessages = messages.filter((message) => message.author.bot).first(interaction.options.getInteger("amount", true));
-      if (!botMessages.size) {
+      if (!botMessages.length) {
         await interaction.reply({
           content: "No bot messages were found in this channel.",
           ephemeral: true,
@@ -2036,7 +2117,7 @@ export const moderationCommands = [
 
       await channel.bulkDelete(botMessages, true);
       await interaction.reply({
-        content: `🤖 Deleted ${botMessages.size} bot message${botMessages.size === 1 ? "" : "s"}.`,
+        content: `🤖 Deleted ${botMessages.length} bot message${botMessages.length === 1 ? "" : "s"}.`,
         ephemeral: false,
       });
     },
