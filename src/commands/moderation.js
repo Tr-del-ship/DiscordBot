@@ -128,6 +128,7 @@ const actionCommands = new Set([
   "untimeout",
   "warn",
   "clearwarnings",
+  "dm",
   "mute",
   "unmute",
   "deafen",
@@ -524,6 +525,125 @@ export const moderationCommands = [
           console.error(`Unable to delete ticket channel ${channel.id}:`, error);
         });
       }, 5000);
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("dm")
+      .setDescription("Send a private message to a server member")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+      .addUserOption((option) =>
+        option
+          .setName("user")
+          .setDescription("The server member to message")
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("message")
+          .setDescription("The message to send")
+          .setRequired(true)
+          .setMaxLength(2000),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ModerateMembers,
+          "Moderate Members",
+        ))
+      ) {
+        return;
+      }
+
+      const user = interaction.options.getUser("user", true);
+      const member = await fetchMember(interaction, user);
+      if (!member) {
+        await interaction.reply({
+          content: "You can only use this command to message a member of this server.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const message = interaction.options.getString("message", true);
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        await user.send({
+          content: message,
+          allowedMentions: { parse: [] },
+        });
+      } catch (error) {
+        if (error.code === 50007) {
+          await interaction.editReply({
+            content: "That member's privacy settings prevent the bot from sending them a direct message.",
+          });
+          return;
+        }
+        throw error;
+      }
+
+      await interaction.editReply({
+        content: `Sent a private message to **${user.tag}**.`,
+        allowedMentions: { parse: [] },
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("message")
+      .setDescription("Send a message as the bot in this channel")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addStringOption((option) =>
+        option
+          .setName("message")
+          .setDescription("The message to send")
+          .setRequired(true)
+          .setMaxLength(2000),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageMessages,
+          "Manage Messages",
+        ))
+      ) {
+        return;
+      }
+
+      const channel = interaction.channel;
+      if (!channel?.isTextBased() || !channel.isSendable()) {
+        await interaction.reply({
+          content: "The bot cannot send messages in this channel.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const botMember =
+        interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+      if (!channel.permissionsFor(botMember)?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+      ])) {
+        await interaction.reply({
+          content: "The bot needs View Channel and Send Messages permissions here.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+      await channel.send({
+        content: interaction.options.getString("message", true),
+        allowedMentions: { parse: [] },
+      });
+      await interaction.editReply({
+        content: "Message sent.",
+      });
     },
   },
   {

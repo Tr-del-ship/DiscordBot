@@ -71,6 +71,8 @@ const loggedCommands = new Set([
   "untimeout",
   "warn",
   "clearwarnings",
+  "dm",
+  "message",
   "mute",
   "unmute",
   "deafen",
@@ -108,10 +110,13 @@ async function sendToLogChannel(client, guildId, payload) {
 
 async function logModerationCommand(interaction, client) {
   const target = interaction.options.getUser("user");
-  const reason =
-    interaction.options.getString("reason") ??
-    interaction.options.getString("warning_id") ??
-    "No reason provided";
+  const reason = interaction.commandName === "dm"
+    ? "Private message sent by moderator; message content not retained."
+    : interaction.commandName === "message"
+      ? `Bot message sent in #${interaction.channel?.name ?? "unknown"}; message content not retained.`
+      : interaction.options.getString("reason") ??
+        interaction.options.getString("warning_id") ??
+        "No reason provided";
   const action = {
     command: interaction.commandName,
     targetId: target?.id ?? null,

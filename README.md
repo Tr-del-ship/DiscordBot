@@ -87,6 +87,8 @@ Need:
 | `/coinflip` | Flip a coin | None |
 | `/serverinfo` | Show information and description for this server | None |
 | `/clear amount` | Delete 1–100 recent messages | Manage Messages |
+| `/dm user message` | Send a private message to a server member without triggering mentions | Moderate Members |
+| `/message message` | Send a message as the bot in the current channel without triggering mentions | Manage Messages |
 | `/kick user [reason]` | Remove a member from the server | Kick Members |
 | `/ban user [reason]` | Ban a user from the server | Ban Members |
 | `/timeout user minutes [reason]` | Time out a member for 1–40,320 minutes | Moderate Members |
@@ -128,7 +130,7 @@ Need:
 | `/ticket` | Create a private support channel | None |
 | `/closeticket` | Close a ticket you opened (or manage as a channel moderator) | Ticket opener or Manage Channels |
 
-All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. The bot stores warnings, moderation action records, temporary-ban expiry times, log-channel settings, moderator-role settings, and (when enabled) edited/deleted message content locally in `data/bot-data.json`. Expired temporary bans are processed after restart as well as while the bot is running.
+All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. `/dm` only targets members of the current server and reports when their privacy settings block delivery. `/dm` and `/message` disable mention parsing; their message bodies are not retained in moderation logs. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. The bot stores warnings, moderation action records, temporary-ban expiry times, log-channel settings, moderator-role settings, and (when enabled) edited/deleted message content locally in `data/bot-data.json`. Expired temporary bans are processed after restart as well as while the bot is running.
 
 
 ## Frequently Asked Questions
