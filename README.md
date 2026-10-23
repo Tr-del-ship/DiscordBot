@@ -43,11 +43,13 @@ s
    CLIENT_ID=your_application_id
    # Optional: register commands in this server for quick testing
    DISCORD_GUILD_ID=your_test_server_id
+   # Optional: enable message edit/delete auditing
+   ENABLE_MESSAGE_AUDIT=false
    ```
 
    Keep `.env` private; it is excluded from Git.
 
-3. In the Developer Portal, enable the **bot** and **applications.commands** scopes when generating an invite link. Invite the bot to your server and grant only the permissions it needs. Moderation commands require the bot to have the corresponding server permission. Enabling administrator is recommended for permissions.
+3. In the Developer Portal, enable the **bot** and **applications.commands** scopes when generating an invite link. For message auditing, set `ENABLE_MESSAGE_AUDIT=true` in `.env` and enable **Message Content Intent** under **Bot > Privileged Gateway Intents**, then restart the bot and configure `/createlogchannel`. Without that setting, the bot does not request the privileged intent and only moderation actions are logged. Invite the bot to your server and grant only the permissions it needs; do not grant Administrator unless you specifically need it.
 
 4. Start the bot:
 
@@ -71,6 +73,7 @@ Need:
 - create instant invite
 - move members
 - view audit log
+- manage server (to configure log channels and moderator roles)
 + More permissions may be required soon!
 ------------------------------------------------------------------------------------------------------------------ 
    
@@ -82,15 +85,15 @@ Need:
 | `/ping` | Check the bot's response time | None |
 | `/eightball` | Ask the magic eight ball a question | None |
 | `/coinflip` | Flip a coin | None |
-| `/serverinfo` | Show information about this server | None |
+| `/serverinfo` | Show information and description for this server | None |
 | `/clear amount` | Delete 1–100 recent messages | Manage Messages |
 | `/kick user [reason]` | Remove a member from the server | Kick Members |
 | `/ban user [reason]` | Ban a user from the server | Ban Members |
 | `/timeout user minutes [reason]` | Time out a member for 1–40,320 minutes | Moderate Members |
 | `/untimeout user` | Remove a member's timeout | Moderate Members |
-| `/warn user reason` | Issue a warning to a user | Moderate Members |
-| `/warnings user` | Check a member's stored warnings | Moderate Members |
-| `/clearwarnings user` | Clear a member's warnings | Moderate Members |
+| `/warn user reason` | Issue a warning to a user | Moderate Members or assigned moderator role |
+| `/warnings user` | Check a member's stored warnings | Moderate Members or assigned moderator role |
+| `/clearwarnings user warning_id` | Clear one specific warning shown by `/warnings` | Moderate Members or assigned moderator role |
 | `/mute user [reason]` | Add the muted role to a member | Manage Roles |
 | `/unmute user [reason]` | Remove the muted role from a member | Manage Roles |
 | `/deafen user [reason]` | Deafen a member in voice chat | Moderate Members |
@@ -114,11 +117,18 @@ Need:
 | `/createchannel name [topic]` | Create a text channel | Manage Channels |
 | `/deletechannel channel [reason]` | Delete a channel | Manage Channels |
 | `/roleinfo role` | Show details for a role | View Audit Log |
-| `/userinfo user` | Show details for a member | View Audit Log |
+| `/userinfo user` | Show account and server join dates, roles, and stored infractions | View Audit Log |
 | `/cleanup user amount` | Remove a user's recent messages in this channel | Manage Messages |
 | `/purgebots amount` | Remove recent bot messages from this channel | Manage Messages |
+| `/createlogchannel channel` | Configure a channel for moderation logs and opt-in message edit/delete auditing | Manage Server |
+| `/removelogchannel` | Disable moderation log delivery and message audit collection | Manage Server |
+| `/audit [phrase] [user_id]` | Search recorded message edits and deletions | View Audit Log |
+| `/cleanuplogs days` | Remove old message audit records while retaining moderation-action and warning records | Manage Server |
+| `/moderatorperm role enabled` | Grant or revoke a role's access to `/warn`, `/warnings`, and `/clearwarnings` | Manage Server |
+| `/ticket` | Create a private support channel | None |
+| `/closeticket` | Close a ticket you opened (or manage as a channel moderator) | Ticket opener or Manage Channels |
 
-All moderation commands are restricted to servers. The bot checks the invoking member's permission, and Discord also enforces the command's configured default permission.
+All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. The bot stores warnings, moderation action records, log-channel settings, moderator-role settings, and (when enabled) edited/deleted message content locally in `data/bot-data.json`.
 
 
 ## Frequently Asked Questions
@@ -154,49 +164,11 @@ Your bot code requires permission to read server data (like tracking member join
 
 
 
-## Looking Towards The Future
-- Commands like `userinfo` will show all the roles that the user currently has also including, join date, server join date and infractions like warnings, kicks and bans.
-- `serverinfo` will present more things about the server like the server description.
-- Fix the /warn bug. (Ability to warn yourself.) There will also be some additional restrictions to the warn command like the abilty to warn roles that have a higher ranking than them.
-- Instead of `clearwarnings` clearing ALL warnings, it will present all warnings they have at the moment and give mods the ability to clear one specific warning.
-- Removing the ability to use ALL moderation commands on yourself.
-- If there are updates available, some text will appear in the terminal that the bot is running on saying "Update available for the bot, please refer to [DiscordBot Install](https://github.com/Tr-del-ship/DiscordBot/tree/codespace-refactored-engine-4qw4pwjp4grq3j6qv)."
-- Built in Ticketing system like the Tickety bot on discord.
+## Data and privacy notes
 
-### Commmands
-A lot more commands coming next month such as, `/createlogchannel` and many more!
+Message audit logging is off until `ENABLE_MESSAGE_AUDIT=true`, the Message Content privileged intent is enabled in Discord, and a server manager selects a log channel with `/createlogchannel`. After activation, message edits and deletions are saved locally so `/audit` can search them (up to the newest 10,000 records per server). Use `/removelogchannel` to stop collection and log delivery. `/cleanuplogs` removes only these message audit records; warnings and moderation-action records are stored separately. Data is kept in `data/bot-data.json`, which should be included in your hosting backups and protected from public access.
 
-- `/createlogchannel` will allow a user to pick a channel that exists in the server which will show all moderation commands like /warn into that specific channel. Fun commands like ping, eightball, coinflip and other ones that may be considered fun will not show up in the channel. Simplified: Shows all moderation actions taken against users like /warn, /purge, /cleanup and whatnot.
+The ticket feature creates one private text channel each time `/ticket` is used. The opener and the bot can view it; grant staff access by managing the ticket channel's permissions. The opener or a member with Manage Channels can close it with `/closeticket`.
 
 
-- `/audit` Queries your bot's database for deleted or edited messages matching a specific phrase or user ID. This allows staff to catch someone who posted a scam link or racial slur and immediately deleted it before anyone saw it.
-
-
-- `/cleanuplogs <days>` This command securely prunes your bot's database logs older than a specific date (e.g., deleting message edits older than 30 days) to keep your hosting storage low and optimize query speeds, while retaining permanent records of bans/warns/kicks.
-
-
-- `/whois <user_id>` What it does: Fetches deep metadata about a target user. It shouldn't just show their avatar, it should display their exact account creation date, when they joined the guild, a list of mutual servers (if your bot is in multiple guilds), and a calculated "Risk Score" based on account age and profile traits.
-
-
-- `/embedcreate` Gives the ability to make embeds freely.
-
-
-- `/moderatorperm` This command gives one or more people the ability to use moderator commands like /warn. 
-
-
-- `/dm` Direct messages a user. Moderator Command.
-
-
-- `/message` Makes the bot send a message of any kind that you inputted. Moderator Command
-
-
-### Future Security Updates
-- restricting dangerous commands: Locking owner only or high privilege administrative commands behind checks like `@command.is_owner()` 
-- Sanitizing inputs and/or URLs to prevent injections attacks and `SSRF`. (Server-Side-Request-Forgery)
-- Cooldown of 1-3 seconds for each command.
-- Moderation action log. (stated above.)
-- Hierarchy checks: Makes sure that low rank mods can not full fill a request of kicking, or banning and other high risk commands.
-And maybe more!
-
-
-Last updated 10/22/26 1:23 PM.
+Last updated 10/23/26.

@@ -1,12 +1,22 @@
 import "dotenv/config";
 import {
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   REST,
   Routes,
 } from "discord.js";
 import { funCommands } from "./commands/fun.js";
-import { moderationCommands } from "./commands/moderation.js";
+import {
+  checkModerationTarget,
+  moderationCommands,
+} from "./commands/moderation.js";
+import {
+  addAuditEvent,
+  addModerationAction,
+  getLogChannelId,
+  initializeStorage,
+} from "./storage.js";
 
 const commands = [...funCommands, ...moderationCommands];
 const commandMap = new Map(
@@ -15,6 +25,10 @@ const commandMap = new Map(
 
 function readConfig() {
   const { DISCORD_TOKEN, CLIENT_ID, DISCORD_GUILD_ID } = process.env;
+  const auditSetting = process.env.ENABLE_MESSAGE_AUDIT ?? "false";
+  if (!["true", "false"].includes(auditSetting.toLowerCase())) {
+    throw new Error("ENABLE_MESSAGE_AUDIT must be set to true or false.");
+  }
   const missing = [
     !DISCORD_TOKEN && "DISCORD_TOKEN",
     !CLIENT_ID && "CLIENT_ID",
@@ -26,7 +40,12 @@ function readConfig() {
     );
   }
 
-  return { token: DISCORD_TOKEN, clientId: CLIENT_ID, guildId: DISCORD_GUILD_ID };
+  return {
+    token: DISCORD_TOKEN,
+    clientId: CLIENT_ID,
+    guildId: DISCORD_GUILD_ID,
+    messageAuditEnabled: auditSetting.toLowerCase() === "true",
+  };
 }
 
 async function registerCommands({ token, clientId, guildId }) {
@@ -41,9 +60,137 @@ async function registerCommands({ token, clientId, guildId }) {
   );
 }
 
+const loggedCommands = new Set([
+  "clear",
+  "kick",
+  "ban",
+  "timeout",
+  "untimeout",
+  "warn",
+  "clearwarnings",
+  "mute",
+  "unmute",
+  "deafen",
+  "undeafen",
+  "addrole",
+  "removerole",
+  "setnickname",
+  "resetnickname",
+  "slowmode",
+  "lock",
+  "unlock",
+  "lockdown",
+  "unlockdown",
+  "softban",
+  "tempban",
+  "unban",
+  "move",
+  "disconnect",
+  "createchannel",
+  "deletechannel",
+  "cleanup",
+  "purgebots",
+]);
+
+async function sendToLogChannel(client, guildId, payload) {
+  const channelId = await getLogChannelId(guildId);
+  if (!channelId) return;
+  const channel = await client.channels.fetch(channelId);
+  if (!channel?.isTextBased() || !channel.isSendable()) {
+    console.error(`Configured log channel ${channelId} is unavailable or not sendable.`);
+    return;
+  }
+  await channel.send({ ...payload, allowedMentions: { parse: [] } });
+}
+
+async function logModerationCommand(interaction, client) {
+  const target = interaction.options.getUser("user");
+  const reason =
+    interaction.options.getString("reason") ??
+    interaction.options.getString("warning_id") ??
+    "No reason provided";
+  const action = {
+    command: interaction.commandName,
+    targetId: target?.id ?? null,
+    targetTag: target?.tag ?? null,
+    moderatorId: interaction.user.id,
+    moderatorTag: interaction.user.tag,
+    reason,
+    timestamp: new Date().toISOString(),
+  };
+  await addModerationAction(interaction.guild.id, action);
+  await sendToLogChannel(client, interaction.guild.id, {
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe67e22)
+        .setTitle(`Moderation: /${action.command}`)
+        .addFields(
+          {
+            name: "Moderator",
+            value: `${action.moderatorTag} (${action.moderatorId})`,
+            inline: true,
+          },
+          {
+            name: "Target",
+            value: target ? `${target.tag} (${target.id})` : "Not specified",
+            inline: true,
+          },
+          { name: "Details", value: reason.slice(0, 1024) },
+        )
+        .setTimestamp(new Date(action.timestamp)),
+    ],
+  });
+}
+
+async function captureMessageAudit(
+  client,
+  type,
+  message,
+  oldContent,
+  newContent,
+  enabled,
+) {
+  if (!enabled) return;
+  if (!message.guild || message.author?.bot) return;
+  if (typeof oldContent !== "string" || typeof newContent !== "string") return;
+  const event = {
+    type,
+    guildId: message.guild.id,
+    channelId: message.channelId,
+    messageId: message.id,
+    userId: message.author.id,
+    username: message.author.tag,
+    oldContent: oldContent.slice(0, 2000),
+    newContent: newContent.slice(0, 2000),
+    timestamp: new Date().toISOString(),
+  };
+  if (!(await getLogChannelId(event.guildId))) return;
+
+  await addAuditEvent(event.guildId, event);
+  const displayedContent = type === "delete"
+    ? `Deleted: ${event.oldContent || "[empty]"}`
+    : `Before: ${event.oldContent || "[empty]"}\nAfter: ${event.newContent || "[empty]"}`;
+  await sendToLogChannel(client, event.guildId, {
+    embeds: [
+      new EmbedBuilder()
+        .setColor(type === "delete" ? 0xe74c3c : 0xf1c40f)
+        .setTitle(`Message ${type}`)
+        .setDescription(displayedContent.slice(0, 4000))
+        .addFields(
+          { name: "Author", value: `${event.username} (${event.userId})` },
+          { name: "Channel", value: `<#${event.channelId}>` },
+          { name: "Message ID", value: event.messageId },
+        )
+        .setTimestamp(new Date(event.timestamp)),
+    ],
+  });
+}
+
 async function main() {
   const config = readConfig();
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
+  if (config.messageAuditEnabled) intents.push(GatewayIntentBits.MessageContent);
+  const client = new Client({ intents });
 
   client.on("error", (error) => {
     console.error("Discord client error:", error);
@@ -63,7 +210,18 @@ async function main() {
     }
 
     try {
+      if (!(await checkModerationTarget(interaction))) return;
       await command.execute(interaction);
+      if (loggedCommands.has(interaction.commandName) && interaction.guild) {
+        try {
+          await logModerationCommand(interaction, client);
+        } catch (error) {
+          console.error(
+            `Unable to persist or deliver /${interaction.commandName} log:`,
+            error,
+          );
+        }
+      }
     } catch (error) {
       console.error(`Command /${interaction.commandName} failed:`, error);
       const response = {
@@ -79,11 +237,36 @@ async function main() {
     }
   });
 
+  client.on("messageDelete", (message) => {
+    captureMessageAudit(
+      client,
+      "delete",
+      message,
+      message.content,
+      "",
+      config.messageAuditEnabled,
+    ).catch(
+      (error) => console.error("Unable to record deleted message:", error),
+    );
+  });
+
+  client.on("messageUpdate", (before, after) => {
+    captureMessageAudit(
+      client,
+      "edit",
+      after,
+      before.content,
+      after.content,
+      config.messageAuditEnabled,
+    ).catch((error) => console.error("Unable to record edited message:", error));
+  });
+
   client.once("ready", () => {
     console.info(`Logged in as ${client.user.tag}.`);
   });
 
   try {
+    await initializeStorage();
     await registerCommands(config);
     await client.login(config.token);
   } catch (error) {

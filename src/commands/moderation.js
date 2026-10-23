@@ -4,6 +4,20 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from "discord.js";
+import {
+  addWarning,
+  getModerationActions,
+  getWarnings,
+  hasModeratorRole,
+  pruneAudit,
+  removeWarning,
+  searchAudit,
+  setLogChannel,
+  setModeratorRole,
+} from "../storage.js";
+
+const messageAuditEnabled =
+  process.env.ENABLE_MESSAGE_AUDIT?.toLowerCase() === "true";
 
 async function requireGuild(interaction) {
   if (interaction.guild) return true;
@@ -17,6 +31,20 @@ async function requireGuild(interaction) {
 
 async function requirePermission(interaction, permission, label) {
   if (interaction.memberPermissions?.has(permission)) return true;
+  if (
+    permission === PermissionFlagsBits.ModerateMembers &&
+    interaction.guild
+  ) {
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    if (
+      await hasModeratorRole(
+        interaction.guild.id,
+        [...member.roles.cache.keys()],
+      )
+    ) {
+      return true;
+    }
+  }
 
   await interaction.reply({
     content: `You need the **${label}** permission to use this command.`,
@@ -49,16 +77,14 @@ async function ensureMutedRole(guild) {
   for (const channel of guild.channels.cache.values()) {
     if (!channel.isTextBased() && !channel.isVoiceBased()) continue;
 
-    await channel.permissionOverwrites
-      .edit(created, {
-        SendMessages: false,
-        SendMessagesInThreads: false,
-        AddReactions: false,
-        Speak: false,
-        Stream: false,
-        ViewChannel: true,
-      })
-      .catch(() => {});
+    await channel.permissionOverwrites.edit(created, {
+      SendMessages: false,
+      SendMessagesInThreads: false,
+      AddReactions: false,
+      Speak: false,
+      Stream: false,
+      ViewChannel: true,
+    });
   }
 
   return created;
@@ -72,34 +98,375 @@ function formatDuration(totalMinutes) {
   return `${hours} hour${hours === 1 ? "" : "s"} ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-const warningStore = new Map();
+const actionCommands = new Set([
+  "kick",
+  "ban",
+  "timeout",
+  "untimeout",
+  "warn",
+  "clearwarnings",
+  "mute",
+  "unmute",
+  "deafen",
+  "undeafen",
+  "addrole",
+  "removerole",
+  "setnickname",
+  "resetnickname",
+  "softban",
+  "tempban",
+  "unban",
+  "move",
+  "disconnect",
+  "cleanup",
+]);
 
-function getWarningKey(guildId, userId) {
-  return `${guildId}:${userId}`;
-}
+export async function checkModerationTarget(interaction) {
+  if (!actionCommands.has(interaction.commandName)) return true;
 
-function getWarningsForMember(guild, user) {
-  return warningStore.get(getWarningKey(guild.id, user.id)) ?? [];
-}
+  const user = interaction.options.getUser("user");
+  if (!user) return true;
+  if (user.id === interaction.user.id) {
+    await interaction.reply({
+      content: "You cannot use moderation commands on yourself.",
+      ephemeral: true,
+    });
+    return false;
+  }
 
-function addWarning(guild, user, moderator, reason) {
-  const key = getWarningKey(guild.id, user.id);
-  const warnings = warningStore.get(key) ?? [];
-  warnings.push({
-    reason,
-    moderatorId: moderator.id,
-    moderatorTag: moderator.tag,
-    timestamp: new Date().toISOString(),
-  });
-  warningStore.set(key, warnings);
-  return warnings;
-}
+  const guild = interaction.guild;
+  if (!guild) return true;
+  const [actor, target, botMember] = await Promise.all([
+    guild.members.fetch(interaction.user.id),
+    fetchMember(interaction, user),
+    guild.members.fetchMe(),
+  ]);
+  if (!target) return true;
 
-function clearWarningsForMember(guild, user) {
-  warningStore.delete(getWarningKey(guild.id, user.id));
+  const isOwner = interaction.user.id === guild.ownerId;
+  if (
+    !isOwner &&
+    (target.id === guild.ownerId ||
+      actor.roles.highest.comparePositionTo(target.roles.highest) <= 0)
+  ) {
+    await interaction.reply({
+      content: "You can only moderate members with a lower top role than yours.",
+      ephemeral: true,
+    });
+    return false;
+  }
+  const role = interaction.options.getRole("role");
+  if (
+    role &&
+    (role.managed ||
+      (!isOwner && actor.roles.highest.comparePositionTo(role) <= 0) ||
+      botMember.roles.highest.comparePositionTo(role) <= 0)
+  ) {
+    await interaction.reply({
+      content: "The role must be manageable and below both your highest role and the bot's highest role.",
+      ephemeral: true,
+    });
+    return false;
+  }
+  if (
+    target.id === botMember.id ||
+    botMember.roles.highest.comparePositionTo(target.roles.highest) <= 0
+  ) {
+    await interaction.reply({
+      content: "The bot's highest role must be above the target's highest role.",
+      ephemeral: true,
+    });
+    return false;
+  }
+
+  return true;
 }
 
 export const moderationCommands = [
+  {
+    data: new SlashCommandBuilder()
+      .setName("createlogchannel")
+      .setDescription("Choose where moderation and message audit logs are posted")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName("channel")
+          .setDescription("An existing text channel")
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageGuild,
+          "Manage Server",
+        ))
+      ) {
+        return;
+      }
+
+      const channel = interaction.options.getChannel("channel", true);
+      await setLogChannel(interaction.guild.id, channel.id);
+      await interaction.reply({
+        content: messageAuditEnabled
+          ? `Moderation actions and message edits/deletions will be logged in <#${channel.id}> from now on.`
+          : `Moderation actions will be logged in <#${channel.id}>. To also audit message edits and deletions, set ENABLE_MESSAGE_AUDIT=true and enable Message Content Intent in the Developer Portal, then restart the bot.`,
+        ephemeral: true,
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("removelogchannel")
+      .setDescription("Disable moderation and message audit logging")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageGuild,
+          "Manage Server",
+        ))
+      ) {
+        return;
+      }
+      await setLogChannel(interaction.guild.id, null);
+      await interaction.reply({
+        content: "Message auditing and moderation log delivery are disabled for this server.",
+        ephemeral: true,
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("audit")
+      .setDescription("Search recorded message edits and deletions")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ViewAuditLog)
+      .addStringOption((option) =>
+        option
+          .setName("phrase")
+          .setDescription("Text to find in the original or edited message")
+          .setMaxLength(100),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("user_id")
+          .setDescription("Discord user ID to search for")
+          .setMaxLength(20),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ViewAuditLog,
+          "View Audit Log",
+        ))
+      ) {
+        return;
+      }
+
+      const phrase = interaction.options.getString("phrase");
+      const userId = interaction.options.getString("user_id");
+      if (!phrase && !userId) {
+        await interaction.reply({
+          content: "Provide a phrase, a user ID, or both to search.",
+          ephemeral: true,
+        });
+        return;
+      }
+      if (userId && !/^\d{17,20}$/.test(userId)) {
+        await interaction.reply({
+          content: "Enter a valid Discord user ID.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const matches = await searchAudit(interaction.guild.id, { phrase, userId });
+      const lines = matches.slice(-10).reverse().map((event) => {
+        const content = event.type === "delete"
+          ? event.oldContent
+          : `${event.oldContent} -> ${event.newContent}`;
+        return `**${event.type}** <#${event.channelId}> <@${event.userId}> — ${new Date(event.timestamp).toLocaleString()}\n${(content || "[empty]").replace(/\s+/g, " ").slice(0, 150)}`;
+      });
+      await interaction.reply({
+        content: matches.length
+          ? `Found ${matches.length} record(s); showing the latest ${lines.length}:\n${lines.join("\n\n")}`.slice(0, 1900)
+          : messageAuditEnabled
+            ? "No matching audit records were found. Message auditing starts after /createlogchannel is configured."
+            : "No records were found. Enable ENABLE_MESSAGE_AUDIT=true, enable Message Content Intent in the Developer Portal, and configure /createlogchannel to collect message audits.",
+        ephemeral: true,
+        allowedMentions: { parse: [] },
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("cleanuplogs")
+      .setDescription("Delete message audit records older than a number of days")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addIntegerOption((option) =>
+        option
+          .setName("days")
+          .setDescription("Retain audit records newer than this many days")
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(3650),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageGuild,
+          "Manage Server",
+        ))
+      ) {
+        return;
+      }
+
+      const days = interaction.options.getInteger("days", true);
+      const removed = await pruneAudit(
+        interaction.guild.id,
+        Date.now() - days * 24 * 60 * 60 * 1000,
+      );
+      await interaction.reply({
+        content: `Removed ${removed} message audit record(s) older than ${days} day(s). Warning and moderation-action records were retained.`,
+        ephemeral: true,
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("moderatorperm")
+      .setDescription("Grant or revoke warning-command access for a role")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addRoleOption((option) =>
+        option.setName("role").setDescription("The moderator role").setRequired(true),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName("enabled")
+          .setDescription("Whether the role can use warning commands")
+          .setRequired(true),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageGuild,
+          "Manage Server",
+        ))
+      ) {
+        return;
+      }
+
+      const role = interaction.options.getRole("role", true);
+      const enabled = interaction.options.getBoolean("enabled", true);
+      if (role.managed || role.id === interaction.guild.id) {
+        await interaction.reply({
+          content: "That role cannot be used as a moderator role.",
+          ephemeral: true,
+        });
+        return;
+      }
+      await setModeratorRole(interaction.guild.id, role.id, enabled);
+      await interaction.reply({
+        content: `${enabled ? "Granted" : "Revoked"} /warn, /warnings, and /clearwarnings access for **${role.name}**.`,
+        ephemeral: true,
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("ticket")
+      .setDescription("Open a private support ticket"),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      const existingTicket = interaction.guild.channels.cache.find(
+        (channel) =>
+          channel.topic === `Support ticket opened by ${interaction.user.id}`,
+      );
+      if (existingTicket) {
+        await interaction.reply({
+          content: `You already have an open ticket: <#${existingTicket.id}>.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const safeName = interaction.user.username
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .slice(0, 70);
+      await interaction.deferReply({ ephemeral: true });
+      const channel = await interaction.guild.channels.create({
+        name: `ticket-${safeName || interaction.user.id.slice(-6)}`,
+        type: ChannelType.GuildText,
+        topic: `Support ticket opened by ${interaction.user.id}`,
+        permissionOverwrites: [
+          { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+            ],
+          },
+          {
+            id: interaction.client.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ManageChannels,
+              PermissionFlagsBits.ReadMessageHistory,
+            ],
+          },
+        ],
+      });
+      await channel.send({
+        content: `<@${interaction.user.id}> Your ticket is open. Use /closeticket when you are finished.`,
+        allowedMentions: { users: [interaction.user.id] },
+      });
+      await interaction.editReply(`Created your private ticket: <#${channel.id}>.`);
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("closeticket")
+      .setDescription("Close the private ticket in this channel"),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      const channel = interaction.channel;
+      const isTicket = channel?.name.startsWith("ticket-") &&
+        channel.topic?.startsWith("Support ticket opened by ");
+      const isOwner = channel?.topic === `Support ticket opened by ${interaction.user.id}`;
+      const canManage = interaction.memberPermissions?.has(
+        PermissionFlagsBits.ManageChannels,
+      );
+      if (!isTicket || (!isOwner && !canManage)) {
+        await interaction.reply({
+          content: "Only the ticket opener or a channel manager can close this ticket.",
+          ephemeral: true,
+        });
+        return;
+      }
+      await interaction.deferReply();
+      await interaction.editReply("Closing this ticket in 5 seconds.");
+      setTimeout(() => {
+        channel.delete("Ticket closed").catch((error) => {
+          console.error(`Unable to delete ticket channel ${channel.id}:`, error);
+        });
+      }, 5000);
+    },
+  },
   {
     data: new SlashCommandBuilder()
       .setName("clear")
@@ -318,7 +685,6 @@ export const moderationCommands = [
     data: new SlashCommandBuilder()
       .setName("warn")
       .setDescription("Issue a warning to a member")
-      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
       .addUserOption((option) =>
         option
           .setName("user")
@@ -346,17 +712,34 @@ export const moderationCommands = [
 
       const user = interaction.options.getUser("user", true);
       const reason = interaction.options.getString("reason", true);
-      const warnings = addWarning(
-        interaction.guild,
-        user,
+      const member = await fetchMember(interaction, user);
+      if (!member) {
+        await interaction.reply({
+          content: "That user is not a member of this server.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const warning = await addWarning(
+        interaction.guild.id,
+        user.id,
         interaction.user,
         reason,
       );
 
-      await user.send(`You were warned in **${interaction.guild.name}**: ${reason}`).catch(() => {});
+      try {
+        await user.send({
+          content: `You were warned in **${interaction.guild.name}**: ${reason}`,
+          allowedMentions: { parse: [] },
+        });
+      } catch (error) {
+        if (error.code !== 50007) throw error;
+      }
       await interaction.reply({
-        content: `⚠️ Warned **${user.tag}** for: ${reason} (${warnings.length} total warning${warnings.length === 1 ? "" : "s"}).`,
+        content: `⚠️ Warned **${user.tag}** for: ${reason} (warning ID: \`${warning.id}\`).`,
         ephemeral: false,
+        allowedMentions: { parse: [] },
       });
     },
   },
@@ -364,7 +747,6 @@ export const moderationCommands = [
     data: new SlashCommandBuilder()
       .setName("warnings")
       .setDescription("Check the warnings for a member")
-      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
       .addUserOption((option) =>
         option
           .setName("user")
@@ -384,39 +766,58 @@ export const moderationCommands = [
       }
 
       const user = interaction.options.getUser("user", true);
-      const warnings = getWarningsForMember(interaction.guild, user);
+      const warnings = await getWarnings(interaction.guild.id, user.id);
 
       if (!warnings.length) {
         await interaction.reply({
-          content: `**${user.tag}** currently has no logged warnings in this bot yet. Use /warn to create them.`,
+          content: `**${user.tag}** currently has no logged warnings in this bot.`,
           ephemeral: true,
         });
         return;
       }
 
-      const lines = warnings
-        .map((warning, index) => {
-          const date = new Date(warning.timestamp).toLocaleString();
-          return `${index + 1}. ${date} — ${warning.reason} (mod: ${warning.moderatorTag})`;
-        })
-        .join("\n");
+      const pages = [];
+      let page = "";
+      for (const warning of warnings) {
+        const line = `\`${warning.id}\` ${new Date(warning.timestamp).toLocaleString()} — ${warning.reason} (mod: ${warning.moderatorTag})`;
+        if (page && page.length + line.length + 1 > 1700) {
+          pages.push(page);
+          page = "";
+        }
+        page += `${page ? "\n" : ""}${line}`;
+      }
+      pages.push(page);
 
       await interaction.reply({
-        content: `**Warn log for ${user.tag}**\n${lines}`,
+        content: `**Warn log for ${user.tag}** (${warnings.length} total)\n${pages[0]}`,
         ephemeral: true,
+        allowedMentions: { parse: [] },
       });
+      for (const nextPage of pages.slice(1)) {
+        await interaction.followUp({
+          content: nextPage,
+          ephemeral: true,
+          allowedMentions: { parse: [] },
+        });
+      }
     },
   },
   {
     data: new SlashCommandBuilder()
       .setName("clearwarnings")
-      .setDescription("Clear all warnings for a member")
-      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+      .setDescription("Clear one specific warning from a member")
       .addUserOption((option) =>
         option
           .setName("user")
           .setDescription("The member to clear warnings from")
           .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("warning_id")
+          .setDescription("The warning ID shown by /warnings")
+          .setRequired(true)
+          .setMaxLength(32),
       ),
     async execute(interaction) {
       if (!(await requireGuild(interaction))) return;
@@ -431,9 +832,16 @@ export const moderationCommands = [
       }
 
       const user = interaction.options.getUser("user", true);
-      clearWarningsForMember(interaction.guild, user);
+      const warningId = interaction.options.getString("warning_id", true);
+      if (!(await removeWarning(interaction.guild.id, user.id, warningId))) {
+        await interaction.reply({
+          content: "That warning ID was not found for this member.",
+          ephemeral: true,
+        });
+        return;
+      }
       await interaction.reply({
-        content: `Cleared warnings for **${user.tag}**.`,
+        content: `Cleared warning \`${warningId}\` for **${user.tag}**.`,
         ephemeral: true,
       });
     },
@@ -1005,7 +1413,7 @@ export const moderationCommands = [
         await channel.permissionOverwrites.edit(interaction.guild.roles.everyone, {
           SendMessages: false,
           AddReactions: false,
-        }).catch(() => {});
+        });
         locked.push(channel.name);
       }
 
@@ -1044,7 +1452,7 @@ export const moderationCommands = [
         await channel.permissionOverwrites.edit(interaction.guild.roles.everyone, {
           SendMessages: null,
           AddReactions: null,
-        }).catch(() => {});
+        });
         unlocked.push(channel.name);
       }
 
@@ -1138,7 +1546,11 @@ export const moderationCommands = [
         reason,
       });
       setTimeout(() => {
-        interaction.guild.members.unban(user).catch(() => {});
+        interaction.guild.members
+          .unban(user)
+          .catch((error) =>
+            console.error(`Unable to unban ${user.id} after temporary ban:`, error),
+          );
       }, minutes * 60_000);
       await interaction.reply({
         content: `⏲️ Temporarily banned **${user.tag}** for ${formatDuration(minutes)}.`,
@@ -1493,6 +1905,16 @@ export const moderationCommands = [
 
       const user = interaction.options.getUser("user", true);
       const member = await fetchMember(interaction, user);
+      const [warnings, actions] = await Promise.all([
+        getWarnings(interaction.guild.id, user.id),
+        getModerationActions(interaction.guild.id, user.id),
+      ]);
+      const roles = member
+        ? member.roles.cache
+            .filter((role) => role.id !== interaction.guild.id)
+            .map((role) => `<@&${role.id}>`)
+            .join(", ")
+        : "";
       const embed = new EmbedBuilder()
         .setColor(0x5865f2)
         .setTitle(user.tag)
@@ -1501,8 +1923,10 @@ export const moderationCommands = [
           { name: "ID", value: user.id, inline: true },
           { name: "Bot", value: user.bot ? "Yes" : "No", inline: true },
           { name: "Nickname", value: member?.nickname ?? "None", inline: true },
+          { name: "Account created", value: `<t:${Math.floor(user.createdTimestamp / 1000)}:F>`, inline: false },
           { name: "Joined", value: member ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:F>` : "Not a member", inline: false },
-          { name: "Roles", value: member ? String(member.roles.cache.size - 1) : "0", inline: true },
+          { name: "Roles", value: roles.slice(0, 1024) || "None", inline: false },
+          { name: "Logged infractions", value: `Warnings: ${warnings.length}\nModeration actions: ${actions.length}`, inline: true },
         );
       await interaction.reply({ embeds: [embed], ephemeral: false });
     },

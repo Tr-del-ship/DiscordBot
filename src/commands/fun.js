@@ -76,6 +76,11 @@ export const funCommands = [
             value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`,
             inline: true,
           },
+          {
+            name: "Description",
+            value: guild.description?.slice(0, 1024) ?? "No server description set.",
+            inline: false,
+          },
           { name: "Server ID", value: guild.id },
         );
 
