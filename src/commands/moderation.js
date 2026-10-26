@@ -356,8 +356,8 @@ export const moderationCommands = [
         content: matches.length
           ? `Found ${matches.length} record(s); showing the latest ${lines.length}:\n${lines.join("\n\n")}`.slice(0, 1900)
           : messageAuditEnabled
-            ? "No matching audit records were found. Message auditing starts after /createlogchannel is configured."
-            : "No records were found. Enable ENABLE_MESSAGE_AUDIT=true, enable Message Content Intent in the Developer Portal, and configure /createlogchannel to collect message audits.",
+            ? "No matching audit records were found. Message auditing starts after /createlogchannel is configured. Are you sure you have set it up correctly?"
+            : "No records were found. Enable ENABLE_MESSAGE_AUDIT=true, enable Message Content Intent in the Developer Portal, and configure /createlogchannel to collect message audits. Are you sure you have set it up correctly?",
         ephemeral: true,
         allowedMentions: { parse: [] },
       });
@@ -630,7 +630,7 @@ export const moderationCommands = [
         PermissionFlagsBits.SendMessages,
       ])) {
         await interaction.reply({
-          content: "The bot needs View Channel and Send Messages permissions here.",
+          content: "The bot needs View Channel and Send Messages permissions here. Check the channel's permissions and try again.",
           ephemeral: true,
         });
         return;
@@ -767,6 +767,7 @@ export const moderationCommands = [
       await interaction.guild.members.ban(user, {
         reason: interaction.options.getString("reason") ?? undefined,
       });
+      await removeTemporaryBan(interaction.guild.id, user.id);
       await interaction.editReply(`Banned **${user.tag}**.`);
     },
   },
@@ -894,7 +895,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are you sure they are not banned or have left?",
           ephemeral: true,
         });
         return;
@@ -927,7 +928,7 @@ export const moderationCommands = [
   {
     data: new SlashCommandBuilder()
       .setName("warnings")
-      .setDescription("Check the warnings for a member")
+      .setDescription("Check the warnings for a member(s)")
       .addUserOption((option) =>
         option
           .setName("user")
@@ -951,7 +952,7 @@ export const moderationCommands = [
 
       if (!warnings.length) {
         await interaction.reply({
-          content: `**${user.tag}** currently has no logged warnings in this bot.`,
+          content: `**${user.tag}** currently has no logged warnings in this bot. Use /warn to issue a warning to this member.`,
           ephemeral: true,
         });
         return;
@@ -1016,7 +1017,7 @@ export const moderationCommands = [
       const warningId = interaction.options.getString("warning_id", true);
       if (!(await removeWarning(interaction.guild.id, user.id, warningId))) {
         await interaction.reply({
-          content: "That warning ID was not found for this member.",
+          content: "That warning ID was not found for this member. Are you sure it exists?",
           ephemeral: true,
         });
         return;
@@ -1060,7 +1061,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are you sure they are not banned or have left?",
           ephemeral: true,
         });
         return;
@@ -1107,7 +1108,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are you sure they are not banned or have left?",
           ephemeral: true,
         });
         return;
@@ -1158,7 +1159,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are they banned or have left?",
           ephemeral: true,
         });
         return;
@@ -1212,7 +1213,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are they banned or have left?",
           ephemeral: true,
         });
         return;
@@ -1273,7 +1274,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are they banned or have left?",
           ephemeral: true,
         });
         return;
@@ -1676,9 +1677,10 @@ export const moderationCommands = [
       const user = interaction.options.getUser("user", true);
       const reason = interaction.options.getString("reason") ?? "Softban";
       await interaction.guild.members.ban(user, { deleteMessageSeconds: 60 * 60 * 24, reason });
+      await removeTemporaryBan(interaction.guild.id, user.id);
       await interaction.guild.members.unban(user, `Softban cleanup for ${reason}`);
       await interaction.reply({
-        content: `🧼 Softbanned **${user.tag}**.`,
+        content: `🧼 Be gone! Softbanned **${user.tag}**.`,
         ephemeral: false,
       });
     },
@@ -1748,7 +1750,7 @@ export const moderationCommands = [
         throw error;
       }
       await interaction.reply({
-        content: `⏲️ Temporarily banned **${user.tag}** for ${formatDuration(minutes)}.`,
+        content: `⏲️ Be gone! Temporarily banned **${user.tag}** for ${formatDuration(minutes)}.`,
         ephemeral: false,
       });
     },
@@ -1784,6 +1786,7 @@ export const moderationCommands = [
 
       const user = interaction.options.getUser("user", true);
       await interaction.guild.members.unban(user, interaction.options.getString("reason") ?? undefined);
+      await removeTemporaryBan(interaction.guild.id, user.id);
       await interaction.reply({
         content: `✅ Unbanned **${user.tag}**.`,
         ephemeral: false,
@@ -1905,7 +1908,7 @@ export const moderationCommands = [
       const member = await fetchMember(interaction, user);
       if (!member) {
         await interaction.reply({
-          content: "That user is not a member of this server.",
+          content: "That user is not a member of this server. Are you sure they are still in the server or exist?",
           ephemeral: true,
         });
         return;
@@ -2038,7 +2041,7 @@ export const moderationCommands = [
       const channel = interaction.options.getChannel("channel", true);
       await channel.delete(interaction.options.getString("reason") ?? "Deleted by moderator");
       await interaction.reply({
-        content: `🗑️ Deleted **${channel.name}**.`,
+        content: `🗑️ Be gone! Deleted: **${channel.name}**.`,
         ephemeral: false,
       });
     },

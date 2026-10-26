@@ -16,15 +16,18 @@ import {
   addAuditEvent,
   addModerationAction,
   getLogChannelId,
-  getTemporaryBans,
   initializeStorage,
   removeTemporaryBan,
+  withBanLock,
 } from "./storage.js";
+import { getCommandCooldown } from "./cooldowns.js";
+import { expireTemporaryBans } from "./temporary-bans.js";
 
 const commands = [...funCommands, ...moderationCommands];
 const commandMap = new Map(
   commands.map((command) => [command.data.name, command]),
 );
+const banLifecycleCommands = new Set(["ban", "softban", "tempban", "unban"]);
 
 function readConfig() {
   const { DISCORD_TOKEN, CLIENT_ID, DISCORD_GUILD_ID } = process.env;
@@ -194,28 +197,6 @@ async function captureMessageAudit(
   });
 }
 
-async function expireTemporaryBans(client) {
-  const temporaryBans = await getTemporaryBans();
-  for (const { guildId, userId, expiresAt } of temporaryBans) {
-    if (expiresAt > Date.now()) continue;
-    try {
-      const guild =
-        client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
-      await guild.members.unban(userId, "Temporary ban expired");
-      await removeTemporaryBan(guildId, userId);
-    } catch (error) {
-      if (error.code === 10004 || error.code === 10026) {
-        await removeTemporaryBan(guildId, userId);
-      } else {
-        console.error(
-          `Unable to expire temporary ban for ${userId} in guild ${guildId}:`,
-          error,
-        );
-      }
-    }
-  }
-}
-
 async function main() {
   const config = readConfig();
   const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
@@ -229,6 +210,17 @@ async function main() {
   client.on("channelCreate", (channel) => {
     configureMutedRoleForChannel(channel).catch((error) => {
       console.error(`Unable to apply muted-role permissions to channel ${channel.id}:`, error);
+    });
+  });
+
+  client.on("guildBanRemove", (ban) => {
+    withBanLock(ban.guild.id, ban.user.id, () =>
+      removeTemporaryBan(ban.guild.id, ban.user.id),
+    ).catch((error) => {
+      console.error(
+        `Unable to clear temporary-ban expiry for ${ban.user.id} in guild ${ban.guild.id}:`,
+        error,
+      );
     });
   });
 
@@ -247,7 +239,31 @@ async function main() {
 
     try {
       if (!(await checkModerationTarget(interaction))) return;
-      await command.execute(interaction);
+      const cooldownRemaining = getCommandCooldown(
+        interaction.commandName,
+        interaction.user.id,
+        interaction.guildId,
+      );
+      if (cooldownRemaining) {
+        await interaction.reply({
+          content: `Please wait ${Math.ceil(cooldownRemaining / 1000)} second(s) before using this command again.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const target = interaction.options.getUser("user");
+      if (
+        banLifecycleCommands.has(interaction.commandName) &&
+        interaction.guild &&
+        target
+      ) {
+        await withBanLock(interaction.guild.id, target.id, () =>
+          command.execute(interaction),
+        );
+      } else {
+        await command.execute(interaction);
+      }
       if (loggedCommands.has(interaction.commandName) && interaction.guild) {
         try {
           await logModerationCommand(interaction, client);

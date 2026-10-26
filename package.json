@@ -1,6 +1,6 @@
 {
   "name": "discord-moderation-bot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "description": "A configurable Discord moderation and fun bot built with discord.js",
   "type": "module",
@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/storage.js && node --check src/commands/fun.js && node --check src/commands/moderation.js"
+    "check": "node --check src/index.js && node --check src/storage.js && node --check src/temporary-bans.js && node --check src/cooldowns.js && node --check src/commands/fun.js && node --check src/commands/moderation.js && node --check test/storage-security.test.js && node --check test/command-registration.test.js",
+    "test": "node --test"
   },
   "dependencies": {
     "discord.js": "^14.19.3",

@@ -45,6 +45,8 @@ Please view [Bot Permissions](https://github.com/Tr-del-ship/DiscordBot/blob/cod
    DISCORD_GUILD_ID=your_test_server_id
    # Optional: enable message edit/delete auditing
    ENABLE_MESSAGE_AUDIT=false
+   # Optional: absolute path for bot state; otherwise the OS user-data folder is used
+   BOT_DATA_DIR=
    ```
 
    Keep `.env` private; it is excluded from Git.
@@ -85,6 +87,13 @@ Need:
 | `/ping` | Check the bot's response time | None |
 | `/eightball` | Ask the magic eight ball a question | None |
 | `/coinflip` | Flip a coin | None |
+| `/dice [sides]` | Roll a die (default d6; up to d1000) | None |
+| `/randomnumber minimum maximum` | Pick a random whole number in a range | None |
+| `/choose options` | Pick from 2–10 choices separated by `\|` | None |
+| `/rps choice` | Play rock, paper, scissors | None |
+| `/trivia` | Get a trivia question and answer | None |
+| `/fortune` | Get a lighthearted fortune | None |
+| `/compliment` | Get a friendly compliment | None |
 | `/serverinfo` | Show information and description for this server | None |
 | `/clear amount` | Delete 1–100 recent messages | Manage Messages |
 | `/dm user message` | Send a private message to a server member without triggering mentions | Moderate Members |
@@ -130,7 +139,7 @@ Need:
 | `/ticket` | Create a private support channel | None |
 | `/closeticket` | Close a ticket you opened (or manage as a channel moderator) | Ticket opener or Manage Channels |
 
-All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. `/dm` only targets members of the current server and reports when their privacy settings block delivery. `/dm` and `/message` disable mention parsing; their message bodies are not retained in moderation logs. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. The bot stores warnings, moderation action records, temporary-ban expiry times, log-channel settings, moderator-role settings, and (when enabled) edited/deleted message content locally in `data/bot-data.json`. Expired temporary bans are processed after restart as well as while the bot is running.
+All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. Commands have a per-user, per-command two-second cooldown. `/dm` only targets members of the current server and reports when their privacy settings block delivery. `/dm` and `/message` disable mention parsing; their message bodies are not retained in moderation logs. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. Temporary bans are serialized with unban/ban actions and invalidated when a ban is removed, preventing an old expiry from removing a later ban.
 
 
 ## Frequently Asked Questions
@@ -168,9 +177,11 @@ Your bot code requires permission to read server data (like tracking member join
 
 ## Data and privacy notes
 
-Message audit logging is off until `ENABLE_MESSAGE_AUDIT=true`, the Message Content privileged intent is enabled in Discord, and a server manager selects a log channel with `/createlogchannel`. After activation, message edits and deletions are saved locally so `/audit` can search them (up to the newest 10,000 records per server). Use `/removelogchannel` to stop collection and log delivery. `/cleanuplogs` removes only these message audit records; warnings and moderation-action records are stored separately. Data is kept in `data/bot-data.json`, which should be included in your hosting backups and protected from public access.
+Message audit logging is off until `ENABLE_MESSAGE_AUDIT=true`, the Message Content privileged intent is enabled in Discord, and a server manager selects a log channel with `/createlogchannel`. After activation, message edits and deletions are saved locally so `/audit` can search them (up to the newest 10,000 records per server). Use `/removelogchannel` to stop collection and `/cleanuplogs` to remove old message audit records.
+
+Bot state is stored outside the project in the current OS user's application-data/state directory, unless an absolute `BOT_DATA_DIR` path is configured. On first startup, legacy `data/bot-data.json` is migrated to the new location and the old file is removed after a successful copy. On POSIX systems the bot restricts its data directory to owner-only (`0700`) and state/lock files to owner read/write (`0600`). Windows relies on the ACLs inherited from the user's profile directory. The bot uses an exclusive lock to prevent multiple processes from writing the same JSON store. If the bot crashes and leaves a stale `.bot.lock`, confirm no bot process is running before removing that lock file from the data directory. This location change is not encryption: anyone with access to the host account can access the data. Use full-disk encryption, restrict host account access, and protect backups. The `.env` file and bot token must also be kept private.
 
 The ticket feature creates one private text channel each time `/ticket` is used. The opener and the bot can view it; grant staff access by managing the ticket channel's permissions. The opener or a member with Manage Channels can close it with `/closeticket`.
 
 
-Last updated 10/23/26.
+Last updated 10/26/26.
