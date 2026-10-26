@@ -12,7 +12,7 @@ This bot aims to be better than the Dyno bot itself, faster and including more c
 | Version | Supported |
 | ------- | --------- |
 | 1.4.0   | ✅        |
-| 1.4.1-pre | ❌ |
+| 1.4.1-pre | ✔️ |
 ## Setup
 
 Open the `DiscordBot` project folder in your editor, then run the commands below from its integrated terminal. If your terminal prompt is in `C:\Windows\System32`, change to the folder where you saved the project first; npm must be run in the folder containing `package.json`.
