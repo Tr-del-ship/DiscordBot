@@ -4,7 +4,7 @@ A fast, configurable Discord bot for server moderation and a few lightweight fun
 This bot aims to be better than the Dyno bot itself, faster and including more commands.
 ## Requirements
 
-- Node.js 20 or newer [Node.js install](https://nodejs.org/en)  Node.js is deprecated.
+- Node.js 20 or newer [Node.js install](https://nodejs.org/en)  Node.js 20 is deprecated.
 - A Discord application and bot created in the [Discord Developer Portal](https://discord.com/developers/applications)
 
 ## Supported versions
