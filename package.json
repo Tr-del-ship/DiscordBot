@@ -1,6 +1,6 @@
 {
   "name": "discord-moderation-bot",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "A configurable Discord moderation and fun bot built with discord.js",
   "type": "module",
