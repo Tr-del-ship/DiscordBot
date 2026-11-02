@@ -1,5 +1,5 @@
 # DiscordBot
-
+v1.5.0
 A fast, configurable Discord bot for server moderation and a few lightweight fun commands, built with JavaScript and discord.js.
 This bot aims to be better than the Dyno bot itself, faster and including more commands.
 ## Requirements
@@ -7,12 +7,6 @@ This bot aims to be better than the Dyno bot itself, faster and including more c
 - Node.js 20 or newer [Node.js install](https://nodejs.org/en)  Node.js 20 is deprecated.
 - A Discord application and bot created in the [Discord Developer Portal](https://discord.com/developers/applications)
 
-## Supported versions
-
-| Version | Supported |
-| ------- | --------- |
-| 1.4.0   | ✅        |
-| 1.4.1-pre | ✔️ |
 ## Setup
 
 Open the `DiscordBot` project folder in your editor, then run the commands below from its integrated terminal. If your terminal prompt is in `C:\Windows\System32`, change to the folder where you saved the project first; npm must be run in the folder containing `package.json`.
