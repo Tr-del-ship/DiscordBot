@@ -1,11 +1,23 @@
+import { randomUUID } from "node:crypto";
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelSelectMenuBuilder,
   ChannelType,
   EmbedBuilder,
+  ModalBuilder,
   PermissionFlagsBits,
+  RoleSelectMenuBuilder,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
+import { getCommandCooldown } from "../cooldowns.js";
 import {
   addWarning,
+  getTicketPanel,
   getModerationActions,
   getWarnings,
   hasModeratorRole,
@@ -15,12 +27,588 @@ import {
   searchAudit,
   setLogChannel,
   setModeratorRole,
+  setTicketPanel,
+  removeTicketPanel,
   setTemporaryBan,
 } from "../storage.js";
 
 const messageAuditEnabled =
   process.env.ENABLE_MESSAGE_AUDIT?.toLowerCase() === "true";
 const moderatorRoleCommands = new Set(["warn", "warnings", "clearwarnings"]);
+const ticketPanelWizardPrefix = "ticket-panel:";
+const ticketPanelOpenPrefix = "ticket-open:";
+const ticketPanelWizardLifetime = 10 * 60 * 1000;
+const ticketPanelWizards = new Map();
+const ticketCreationLocks = new Set();
+const ticketPanelButtonStyles = {
+  Primary: ButtonStyle.Primary,
+  Secondary: ButtonStyle.Secondary,
+  Success: ButtonStyle.Success,
+};
+const announcementPreviewPrefix = "announcement-preview:";
+const announcementPreviewLifetime = 10 * 60 * 1000;
+const maxAnnouncementPreviews = 500;
+const announcementPreviews = new Map();
+const announcementColors = {
+  Blue: 0x5865f2,
+  Green: 0x57f287,
+  Gold: 0xfee75c,
+  Red: 0xed4245,
+  Purple: 0x9b59b6,
+};
+
+function getTicketWizardKey(guildId, userId) {
+  return `${guildId}:${userId}`;
+}
+
+function getActiveTicketWizard(interaction) {
+  if (!interaction.guildId) return null;
+  const key = getTicketWizardKey(interaction.guildId, interaction.user.id);
+  const wizard = ticketPanelWizards.get(key);
+  if (!wizard) return null;
+  if (Date.now() - wizard.createdAt > ticketPanelWizardLifetime) {
+    ticketPanelWizards.delete(key);
+    return null;
+  }
+  return wizard;
+}
+
+function createPanelIntroModal() {
+  const title = new TextInputBuilder()
+    .setCustomId("title")
+    .setLabel("Panel title")
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(256)
+    .setRequired(true);
+  const description = new TextInputBuilder()
+    .setCustomId("description")
+    .setLabel("Panel description")
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(1000)
+    .setRequired(true);
+  return new ModalBuilder()
+    .setCustomId(`${ticketPanelWizardPrefix}intro`)
+    .setTitle("Create a ticket panel")
+    .addComponents(
+      new ActionRowBuilder().addComponents(title),
+      new ActionRowBuilder().addComponents(description),
+    );
+}
+
+function createPanelButtonLabelModal() {
+  const label = new TextInputBuilder()
+    .setCustomId("button-label")
+    .setLabel("Button label")
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(80)
+    .setRequired(true);
+  return new ModalBuilder()
+    .setCustomId(`${ticketPanelWizardPrefix}button-label`)
+    .setTitle("Customize the ticket button")
+    .addComponents(new ActionRowBuilder().addComponents(label));
+}
+
+function ticketPanelStepContent(step) {
+  return `**Ticket panel setup — ${step}/5**`;
+}
+
+function createAnnouncementEmbed(announcement) {
+  return new EmbedBuilder()
+    .setColor(announcementColors[announcement.color])
+    .setTitle(announcement.title)
+    .setDescription(announcement.message);
+}
+
+function pruneAnnouncementPreviews(now = Date.now()) {
+  for (const [id, preview] of announcementPreviews) {
+    if (preview.expiresAt <= now) announcementPreviews.delete(id);
+  }
+}
+
+function createTicketOpenButton(panelId, label, style, disabled = false) {
+  return new ButtonBuilder()
+    .setCustomId(`${ticketPanelOpenPrefix}${panelId}`)
+    .setLabel(label)
+    .setStyle(ticketPanelButtonStyles[style])
+    .setDisabled(disabled);
+}
+
+export async function handleAnnouncementInteraction(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith(announcementPreviewPrefix)) {
+    return false;
+  }
+
+  const [action, previewId] = interaction.customId
+    .slice(announcementPreviewPrefix.length)
+    .split(":");
+  const preview = announcementPreviews.get(previewId);
+  if (!preview || preview.expiresAt <= Date.now()) {
+    announcementPreviews.delete(previewId);
+    await interaction.reply({
+      content: "This announcement preview has expired. Run /announce to create a new one.",
+      ephemeral: true,
+    });
+    return true;
+  }
+  if (
+    interaction.user.id !== preview.userId ||
+    interaction.guildId !== preview.guildId ||
+    !interaction.guild
+  ) {
+    await interaction.reply({
+      content: "Only the moderator who created this preview can use these buttons.",
+      ephemeral: true,
+    });
+    return true;
+  }
+  if (preview.processing) {
+    await interaction.reply({
+      content: "This announcement is already being posted.",
+      ephemeral: true,
+    });
+    return true;
+  }
+  if (action === "cancel") {
+    announcementPreviews.delete(previewId);
+    await interaction.update({
+      content: "Announcement canceled.",
+      embeds: [],
+      components: [],
+    });
+    return true;
+  }
+  if (action !== "post") {
+    await interaction.reply({
+      content: "That announcement action is not valid.",
+      ephemeral: true,
+    });
+    return true;
+  }
+  preview.processing = true;
+  try {
+    await interaction.deferUpdate();
+    const [member, channel] = await Promise.all([
+      interaction.guild.members.fetch(interaction.user.id),
+      interaction.guild.channels.fetch(preview.channelId),
+    ]);
+    if (
+      !channel ||
+      ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)
+    ) {
+      throw new Error("The announcement channel is no longer available.");
+    }
+    if (!channel.permissionsFor(member)?.has(PermissionFlagsBits.ManageMessages)) {
+      throw new Error(
+        "You need Manage Messages in the selected channel to post this announcement.",
+      );
+    }
+    const botMember =
+      interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+    if (
+      !channel.permissionsFor(botMember)?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.EmbedLinks,
+      ])
+    ) {
+      throw new Error(
+        "The bot needs View Channel, Send Messages, and Embed Links in the selected channel.",
+      );
+    }
+
+    await channel.send({
+      embeds: [createAnnouncementEmbed(preview.announcement)],
+      allowedMentions: { parse: [] },
+    });
+    announcementPreviews.delete(previewId);
+    await interaction.editReply({
+      content: `Announcement posted in <#${channel.id}>.`,
+      embeds: [],
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+  } finally {
+    if (announcementPreviews.has(previewId)) {
+      preview.processing = false;
+    }
+  }
+  return true;
+}
+
+async function createTicketForUser(interaction, panel = {}) {
+  const guild = interaction.guild;
+  const lockKey = getTicketWizardKey(guild.id, interaction.user.id);
+  if (ticketCreationLocks.has(lockKey)) {
+    await interaction.reply({
+      content: "Your ticket is already being created. Please wait a moment.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  ticketCreationLocks.add(lockKey);
+  try {
+    const existingTicket = guild.channels.cache.find(
+      (channel) =>
+        channel.topic === `Support ticket opened by ${interaction.user.id}`,
+    );
+    if (existingTicket) {
+      await interaction.reply({
+        content: `You already have an open ticket: <#${existingTicket.id}>.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+    const safeName = interaction.user.username
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .slice(0, 70);
+    const permissionOverwrites = [
+      { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+      {
+        id: interaction.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      },
+      {
+        id: interaction.client.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      },
+      ...(panel.staffRoleIds ?? []).map((roleId) => ({
+        id: roleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      })),
+    ];
+    const channel = await guild.channels.create({
+      name: `ticket-${safeName || interaction.user.id.slice(-6)}`,
+      type: ChannelType.GuildText,
+      topic: `Support ticket opened by ${interaction.user.id}`,
+      ...(panel.categoryId ? { parent: panel.categoryId } : {}),
+      permissionOverwrites,
+    });
+    const staffMentions = (panel.staffRoleIds ?? [])
+      .map((roleId) => `<@&${roleId}>`)
+      .join(" ");
+    await channel.send({
+      content: [
+        `<@${interaction.user.id}> Your ticket is open. Use /closeticket when you are finished.`,
+        staffMentions,
+      ].filter(Boolean).join("\n"),
+      allowedMentions: {
+        users: [interaction.user.id],
+        roles: panel.staffRoleIds ?? [],
+      },
+    });
+    await interaction.editReply(
+      `Created your private ticket: <#${channel.id}>.`,
+    );
+  } finally {
+    ticketCreationLocks.delete(lockKey);
+  }
+}
+
+async function publishTicketPanel(interaction, wizard, buttonLabel) {
+  const guild = interaction.guild;
+  const panelChannel = await guild.channels.fetch(wizard.channelId);
+  if (
+    !panelChannel ||
+    ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(
+      panelChannel.type,
+    )
+  ) {
+    throw new Error("The selected ticket panel channel is no longer available.");
+  }
+  const botPermissions = panelChannel.permissionsFor(interaction.client.user);
+  if (
+    !botPermissions?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+    ])
+  ) {
+    throw new Error(
+      "The bot needs View Channel, Send Messages, and Embed Links in the selected panel channel.",
+    );
+  }
+  const category = await guild.channels.fetch(wizard.categoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    throw new Error("The selected ticket category is no longer available.");
+  }
+  if (
+    !category.permissionsFor(interaction.client.user)?.has(
+      PermissionFlagsBits.ManageChannels,
+    )
+  ) {
+    throw new Error(
+      "The bot needs Manage Channels permission in the selected ticket category.",
+    );
+  }
+  const staffRoles = await Promise.all(
+    wizard.staffRoleIds.map((roleId) => guild.roles.fetch(roleId)),
+  );
+  if (staffRoles.some((role) => !role || role.managed)) {
+    throw new Error("One or more selected staff roles are no longer available.");
+  }
+
+  const initialRow = new ActionRowBuilder().addComponents(
+    createTicketOpenButton("pending", buttonLabel, wizard.buttonStyle, true),
+  );
+  const panelMessage = await panelChannel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle(wizard.title)
+        .setDescription(wizard.description),
+    ],
+    components: [initialRow],
+    allowedMentions: { parse: [] },
+  });
+  let settingsStored = false;
+  try {
+    await setTicketPanel(guild.id, panelMessage.id, {
+      channelId: panelChannel.id,
+      categoryId: category.id,
+      staffRoleIds: wizard.staffRoleIds,
+      title: wizard.title,
+      description: wizard.description,
+      buttonLabel,
+      buttonStyle: wizard.buttonStyle,
+    });
+    settingsStored = true;
+    await panelMessage.edit({
+      components: [
+        new ActionRowBuilder().addComponents(
+          createTicketOpenButton(
+            panelMessage.id,
+            buttonLabel,
+            wizard.buttonStyle,
+          ),
+        ),
+      ],
+    });
+  } catch (error) {
+    if (settingsStored) {
+      await removeTicketPanel(guild.id, panelMessage.id).catch((cleanupError) => {
+        console.error(
+          `Unable to remove incomplete ticket panel settings for ${panelMessage.id}:`,
+          cleanupError,
+        );
+      });
+    }
+    await panelMessage.delete().catch((cleanupError) => {
+      console.error(`Unable to remove incomplete ticket panel ${panelMessage.id}:`, cleanupError);
+    });
+    throw error;
+  }
+}
+
+export async function handleTicketInteraction(interaction) {
+  if (interaction.isButton() && interaction.customId.startsWith(ticketPanelOpenPrefix)) {
+    const panelId = interaction.customId.slice(ticketPanelOpenPrefix.length);
+    if (!interaction.guild) {
+      await interaction.reply({
+        content: "Ticket panels can only be used in a server.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    const panel = await getTicketPanel(interaction.guild.id, panelId);
+    if (!panel) {
+      await interaction.reply({
+        content: "This ticket panel is no longer configured.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    const cooldownRemaining = getCommandCooldown(
+      "ticket",
+      interaction.user.id,
+      interaction.guild.id,
+    );
+    if (cooldownRemaining) {
+      await interaction.reply({
+        content: `Please wait ${Math.ceil(cooldownRemaining / 1000)} second(s) before opening another ticket.`,
+        ephemeral: true,
+      });
+      return true;
+    }
+    await createTicketForUser(interaction, panel);
+    return true;
+  }
+
+  if (!interaction.customId?.startsWith(ticketPanelWizardPrefix)) return false;
+  const wizard = getActiveTicketWizard(interaction);
+  if (!wizard) {
+    await interaction.reply({
+      content: "This setup has expired. Run /createticketpanel to start again.",
+      ephemeral: true,
+    });
+    return true;
+  }
+  const key = getTicketWizardKey(interaction.guildId, interaction.user.id);
+
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId === `${ticketPanelWizardPrefix}intro`
+  ) {
+    const title = interaction.fields.getTextInputValue("title").trim();
+    const description = interaction.fields.getTextInputValue("description").trim();
+    if (!title || !description) {
+      await interaction.reply({
+        content: "Panel title and description cannot be blank. Run /createticketpanel to try again.",
+        ephemeral: true,
+      });
+      ticketPanelWizards.delete(key);
+      return true;
+    }
+    wizard.title = title;
+    wizard.description = description;
+    wizard.lastInteraction = interaction;
+    await interaction.reply({
+      content: `${ticketPanelStepContent(2)}\nChoose where the public panel should be posted.`,
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ChannelSelectMenuBuilder()
+            .setCustomId(`${ticketPanelWizardPrefix}channel`)
+            .setPlaceholder("Select a text channel")
+            .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      ],
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  if (
+    interaction.isChannelSelectMenu() &&
+    interaction.customId === `${ticketPanelWizardPrefix}channel`
+  ) {
+    wizard.channelId = interaction.values[0];
+    wizard.lastInteraction = interaction;
+    await interaction.update({
+      content: `${ticketPanelStepContent(3)}\nSelect the staff roles that should be able to view and reply in tickets.`,
+      components: [
+        new ActionRowBuilder().addComponents(
+          new RoleSelectMenuBuilder()
+            .setCustomId(`${ticketPanelWizardPrefix}roles`)
+            .setPlaceholder("Select support staff roles")
+            .setMinValues(1)
+            .setMaxValues(10),
+        ),
+      ],
+    });
+    return true;
+  }
+
+  if (
+    interaction.isRoleSelectMenu() &&
+    interaction.customId === `${ticketPanelWizardPrefix}roles`
+  ) {
+    wizard.staffRoleIds = [...new Set(interaction.values)];
+    wizard.lastInteraction = interaction;
+    await interaction.update({
+      content: `${ticketPanelStepContent(4)}\nChoose the category where new ticket channels should be created.`,
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ChannelSelectMenuBuilder()
+            .setCustomId(`${ticketPanelWizardPrefix}category`)
+            .setPlaceholder("Select a ticket category")
+            .setChannelTypes(ChannelType.GuildCategory)
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      ],
+    });
+    return true;
+  }
+
+  if (
+    interaction.isChannelSelectMenu() &&
+    interaction.customId === `${ticketPanelWizardPrefix}category`
+  ) {
+    wizard.categoryId = interaction.values[0];
+    wizard.lastInteraction = interaction;
+    await interaction.update({
+      content: `${ticketPanelStepContent(5)}\nChoose the button color.`,
+      components: [
+        new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`${ticketPanelWizardPrefix}style`)
+            .setPlaceholder("Select a button style")
+            .addOptions(
+              { label: "Blue", value: "Primary" },
+              { label: "Grey", value: "Secondary" },
+              { label: "Green", value: "Success" },
+            ),
+        ),
+      ],
+    });
+    return true;
+  }
+
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId === `${ticketPanelWizardPrefix}style`
+  ) {
+    wizard.buttonStyle = interaction.values[0];
+    wizard.lastInteraction = interaction;
+    await interaction.showModal(createPanelButtonLabelModal());
+    return true;
+  }
+
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId === `${ticketPanelWizardPrefix}button-label`
+  ) {
+    const buttonLabel = interaction.fields.getTextInputValue("button-label").trim();
+    if (!buttonLabel) {
+      await interaction.reply({
+        content: "The button label cannot be blank. Run /createticketpanel to try again.",
+        ephemeral: true,
+      });
+      ticketPanelWizards.delete(key);
+      return true;
+    }
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      await publishTicketPanel(interaction, wizard, buttonLabel);
+      ticketPanelWizards.delete(key);
+      await wizard.lastInteraction.deleteReply().catch((error) => {
+        console.error("Unable to remove completed ticket panel setup:", error);
+      });
+      await interaction.editReply("Ticket panel created and published.");
+    } catch (error) {
+      console.error("Unable to publish ticket panel:", error);
+      await interaction.editReply(
+        "The panel could not be published. Check the bot's channel permissions and try again.",
+      );
+    }
+    return true;
+  }
+
+  await interaction.reply({
+    content: "That ticket panel setup step is no longer valid. Run /createticketpanel to start again.",
+    ephemeral: true,
+  });
+  return true;
+}
 
 async function requireGuild(interaction) {
   if (interaction.guild) return true;
@@ -444,58 +1032,39 @@ export const moderationCommands = [
   },
   {
     data: new SlashCommandBuilder()
+      .setName("createticketpanel")
+      .setDescription("Set up and publish a support ticket panel")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageGuild,
+          "Manage Server",
+        ))
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+      for (const [key, wizard] of ticketPanelWizards) {
+        if (now - wizard.createdAt > ticketPanelWizardLifetime) {
+          ticketPanelWizards.delete(key);
+        }
+      }
+      const key = getTicketWizardKey(interaction.guild.id, interaction.user.id);
+      ticketPanelWizards.set(key, { createdAt: now });
+      await interaction.showModal(createPanelIntroModal());
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
       .setName("ticket")
       .setDescription("Open a private support ticket"),
     async execute(interaction) {
       if (!(await requireGuild(interaction))) return;
-      const existingTicket = interaction.guild.channels.cache.find(
-        (channel) =>
-          channel.topic === `Support ticket opened by ${interaction.user.id}`,
-      );
-      if (existingTicket) {
-        await interaction.reply({
-          content: `You already have an open ticket: <#${existingTicket.id}>.`,
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const safeName = interaction.user.username
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, "-")
-        .replace(/-+/g, "-")
-        .slice(0, 70);
-      await interaction.deferReply({ ephemeral: true });
-      const channel = await interaction.guild.channels.create({
-        name: `ticket-${safeName || interaction.user.id.slice(-6)}`,
-        type: ChannelType.GuildText,
-        topic: `Support ticket opened by ${interaction.user.id}`,
-        permissionOverwrites: [
-          { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-          {
-            id: interaction.user.id,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.SendMessages,
-              PermissionFlagsBits.ReadMessageHistory,
-            ],
-          },
-          {
-            id: interaction.client.user.id,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.SendMessages,
-              PermissionFlagsBits.ManageChannels,
-              PermissionFlagsBits.ReadMessageHistory,
-            ],
-          },
-        ],
-      });
-      await channel.send({
-        content: `<@${interaction.user.id}> Your ticket is open. Use /closeticket when you are finished.`,
-        allowedMentions: { users: [interaction.user.id] },
-      });
-      await interaction.editReply(`Created your private ticket: <#${channel.id}>.`);
+      await createTicketForUser(interaction);
     },
   },
   {
@@ -586,6 +1155,130 @@ export const moderationCommands = [
 
       await interaction.editReply({
         content: `Sent a private message to **${user.tag}**.`,
+        allowedMentions: { parse: [] },
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("announce")
+      .setDescription("Preview and post an announcement in a server channel")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addChannelOption((option) =>
+        option
+          .setName("channel")
+          .setDescription("Where to post the announcement")
+          .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("title")
+          .setDescription("Announcement title")
+          .setRequired(true)
+          .setMaxLength(256),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("message")
+          .setDescription("Announcement text")
+          .setRequired(true)
+          .setMaxLength(4000),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("color")
+          .setDescription("Embed color")
+          .addChoices(
+            { name: "Blue", value: "Blue" },
+            { name: "Green", value: "Green" },
+            { name: "Gold", value: "Gold" },
+            { name: "Red", value: "Red" },
+            { name: "Purple", value: "Purple" },
+          ),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      await interaction.deferReply({ ephemeral: true });
+      const channel = interaction.options.getChannel("channel", true);
+      if (
+        channel.guildId !== interaction.guild.id ||
+        ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(
+          channel.type,
+        )
+      ) {
+        await interaction.editReply({
+          content: "Choose a server text or announcement channel.",
+        });
+        return;
+      }
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      if (!channel.permissionsFor(member)?.has(PermissionFlagsBits.ManageMessages)) {
+        await interaction.editReply({
+          content: "You need Manage Messages in the selected channel to post there.",
+        });
+        return;
+      }
+      const botMember =
+        interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+      if (
+        !channel.permissionsFor(botMember)?.has([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks,
+        ])
+      ) {
+        await interaction.editReply({
+          content: "The bot needs View Channel, Send Messages, and Embed Links in the selected channel.",
+        });
+        return;
+      }
+
+      pruneAnnouncementPreviews();
+      if (announcementPreviews.size >= maxAnnouncementPreviews) {
+        await interaction.editReply({
+          content: "There are too many pending announcement previews. Please try again shortly.",
+        });
+        return;
+      }
+
+      const previewId = randomUUID();
+      const announcement = {
+        title: interaction.options.getString("title", true).trim(),
+        message: interaction.options.getString("message", true).trim(),
+        color: interaction.options.getString("color") ?? "Blue",
+      };
+      if (!announcement.title || !announcement.message) {
+        await interaction.editReply({
+          content: "Announcement title and message cannot be blank.",
+        });
+        return;
+      }
+      const expiresAt = Date.now() + announcementPreviewLifetime;
+      announcementPreviews.set(previewId, {
+        userId: interaction.user.id,
+        guildId: interaction.guild.id,
+        channelId: channel.id,
+        announcement,
+        expiresAt,
+        processing: false,
+      });
+
+      await interaction.editReply({
+        content: `Preview for <#${channel.id}>. Only you can approve or cancel it; this preview expires in 10 minutes.`,
+        embeds: [createAnnouncementEmbed(announcement)],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`${announcementPreviewPrefix}post:${previewId}`)
+              .setLabel("Post announcement")
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId(`${announcementPreviewPrefix}cancel:${previewId}`)
+              .setLabel("Cancel")
+              .setStyle(ButtonStyle.Secondary),
+          ),
+        ],
         allowedMentions: { parse: [] },
       });
     },
@@ -2188,7 +2881,7 @@ export const moderationCommands = [
 
       await channel.bulkDelete(matching, true);
       await interaction.reply({
-        content: `🧹 Deleted ${matching.length} message${matching.length === 1 ? "" : "s"} from **${user.tag}**.`,
+        content: `🧹 Be gone! Deleted ${matching.length} message${matching.length === 1 ? "" : "s"} from **${user.tag}**.`,
         ephemeral: false,
         allowedMentions: { parse: [] },
       });

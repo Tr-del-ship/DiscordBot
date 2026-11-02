@@ -88,6 +88,10 @@ function validateState(state) {
       (guild.audit !== undefined && !Array.isArray(guild.audit)) ||
       (guild.moderatorRoleIds !== undefined &&
         !Array.isArray(guild.moderatorRoleIds)) ||
+      (guild.ticketPanels !== undefined &&
+        (typeof guild.ticketPanels !== "object" ||
+          guild.ticketPanels === null ||
+          Array.isArray(guild.ticketPanels))) ||
       (guild.temporaryBans !== undefined &&
         (typeof guild.temporaryBans !== "object" ||
           guild.temporaryBans === null ||
@@ -98,6 +102,32 @@ function validateState(state) {
     for (const userId of Object.keys(guild.temporaryBans ?? {})) {
       if (!/^\d{17,20}$/.test(userId)) {
         throw new Error(`Bot data for guild ${guildId} has an invalid user ID.`);
+      }
+    }
+    for (const [panelId, panel] of Object.entries(guild.ticketPanels ?? {})) {
+      validateSnowflake(panelId, "Ticket panel message ID");
+      assertPlainObject(panel, `Ticket panel ${panelId}`);
+      validateSnowflake(panel.channelId, "Ticket panel channel ID");
+      if (panel.categoryId !== null) {
+        validateSnowflake(panel.categoryId, "Ticket category ID");
+      }
+      if (
+        !Array.isArray(panel.staffRoleIds) ||
+        panel.staffRoleIds.length < 1 ||
+        panel.staffRoleIds.length > 10 ||
+        panel.staffRoleIds.some((roleId) => !/^\d{17,20}$/.test(roleId)) ||
+        typeof panel.title !== "string" ||
+        panel.title.length < 1 ||
+        panel.title.length > 256 ||
+        typeof panel.description !== "string" ||
+        panel.description.length < 1 ||
+        panel.description.length > 4000 ||
+        typeof panel.buttonLabel !== "string" ||
+        panel.buttonLabel.length < 1 ||
+        panel.buttonLabel.length > 80 ||
+        !["Primary", "Secondary", "Success"].includes(panel.buttonStyle)
+      ) {
+        throw new Error(`Ticket panel ${panelId} has an invalid structure.`);
       }
     }
   }
@@ -197,6 +227,7 @@ function guildData(state, guildId) {
       actions: [],
       audit: [],
       moderatorRoleIds: [],
+      ticketPanels: {},
       temporaryBans: {},
     };
   }
@@ -206,6 +237,7 @@ function guildData(state, guildId) {
   guild.actions ??= [];
   guild.audit ??= [];
   guild.moderatorRoleIds ??= [];
+  guild.ticketPanels ??= {};
   guild.temporaryBans ??= {};
   return guild;
 }
@@ -396,6 +428,65 @@ export async function setLogChannel(guildId, channelId) {
 export async function getLogChannelId(guildId) {
   const state = await getState();
   return guildData(state, guildId).logChannelId;
+}
+
+export async function setTicketPanel(guildId, panelId, panel) {
+  validateSnowflake(panelId, "Ticket panel message ID");
+  validateSnowflake(panel.channelId, "Ticket panel channel ID");
+  if (panel.categoryId !== null) {
+    validateSnowflake(panel.categoryId, "Ticket category ID");
+  }
+  if (
+    !Array.isArray(panel.staffRoleIds) ||
+    panel.staffRoleIds.length < 1 ||
+    panel.staffRoleIds.length > 10
+  ) {
+    throw new Error("Ticket panel must have between 1 and 10 staff roles.");
+  }
+  for (const roleId of panel.staffRoleIds) {
+    validateSnowflake(roleId, "Ticket staff role ID");
+  }
+  if (
+    typeof panel.title !== "string" ||
+    panel.title.trim().length < 1 ||
+    panel.title.length > 256 ||
+    typeof panel.description !== "string" ||
+    panel.description.trim().length < 1 ||
+    panel.description.length > 4000 ||
+    typeof panel.buttonLabel !== "string" ||
+    panel.buttonLabel.trim().length < 1 ||
+    panel.buttonLabel.length > 80 ||
+    !["Primary", "Secondary", "Success"].includes(panel.buttonStyle)
+  ) {
+    throw new Error("Ticket panel settings are invalid.");
+  }
+  await updateGuild(guildId, (guild) => {
+    guild.ticketPanels[panelId] = {
+      channelId: panel.channelId,
+      categoryId: panel.categoryId,
+      staffRoleIds: [...new Set(panel.staffRoleIds)],
+      title: panel.title,
+      description: panel.description,
+      buttonLabel: panel.buttonLabel,
+      buttonStyle: panel.buttonStyle,
+    };
+  });
+}
+
+export async function getTicketPanel(guildId, panelId) {
+  validateSnowflake(panelId, "Ticket panel message ID");
+  const state = await getState();
+  return guildData(state, guildId).ticketPanels[panelId] ?? null;
+}
+
+export async function removeTicketPanel(guildId, panelId) {
+  validateSnowflake(panelId, "Ticket panel message ID");
+  let removed = false;
+  await updateGuild(guildId, (guild) => {
+    removed = Object.hasOwn(guild.ticketPanels, panelId);
+    delete guild.ticketPanels[panelId];
+  });
+  return removed;
 }
 
 export async function addAuditEvent(guildId, event) {

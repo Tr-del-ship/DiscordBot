@@ -253,6 +253,7 @@ export const funCommands = [
           "You deserve credit for showing up and trying.",
           "You have excellent potential for making someone's day.",
           "Your perspective adds something unique to the conversation.",
+          "Remember, you are not a stupid AI."
         ])}`,
       );
     },

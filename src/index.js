@@ -10,6 +10,8 @@ import { funCommands } from "./commands/fun.js";
 import {
   configureMutedRoleForChannel,
   checkModerationTarget,
+  handleAnnouncementInteraction,
+  handleTicketInteraction,
   moderationCommands,
 } from "./commands/moderation.js";
 import {
@@ -225,7 +227,24 @@ async function main() {
   });
 
   client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.isChatInputCommand()) {
+      try {
+        if (await handleAnnouncementInteraction(interaction)) return;
+        await handleTicketInteraction(interaction);
+      } catch (error) {
+        console.error("Component interaction failed:", error);
+        const response = {
+          content: "The ticket action failed. Please try again or contact a server administrator.",
+          ephemeral: true,
+        };
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp(response);
+        } else {
+          await interaction.reply(response);
+        }
+      }
+      return;
+    }
 
     const command = commandMap.get(interaction.commandName);
     if (!command) {
@@ -238,7 +257,6 @@ async function main() {
     }
 
     try {
-      if (!(await checkModerationTarget(interaction))) return;
       const cooldownRemaining = getCommandCooldown(
         interaction.commandName,
         interaction.user.id,
@@ -251,6 +269,8 @@ async function main() {
         });
         return;
       }
+
+      if (!(await checkModerationTarget(interaction))) return;
 
       const target = interaction.options.getUser("user");
       if (

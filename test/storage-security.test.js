@@ -215,3 +215,21 @@ test("applies independent per-user command cooldowns", () => {
   );
   assert.equal(getCommandCooldown("test", userId, guildId, now + 2_000), 0);
 });
+
+test("persists ticket panel settings and removes them when requested", async () => {
+  const panelId = "33333333333333333";
+  const panel = {
+    channelId: "44444444444444444",
+    categoryId: "55555555555555555",
+    staffRoleIds: ["66666666666666666", "77777777777777777"],
+    title: "Contact support",
+    description: "Click below to open a private support ticket.",
+    buttonLabel: "Open Ticket",
+    buttonStyle: "Success",
+  };
+
+  await storage.setTicketPanel(guildId, panelId, panel);
+  assert.deepEqual(await storage.getTicketPanel(guildId, panelId), panel);
+  assert.equal(await storage.removeTicketPanel(guildId, panelId), true);
+  assert.equal(await storage.getTicketPanel(guildId, panelId), null);
+});
