@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/storage.js && node --check src/temporary-bans.js && node --check src/cooldowns.js && node --check src/commands/fun.js && node --check src/commands/moderation.js && node --check test/storage-security.test.js && node --check test/command-registration.test.js",
+    "check": "node --check src/index.js && node --check src/storage.js && node --check src/temporary-bans.js && node --check src/cooldowns.js && node --check src/polls.js && node --check src/commands/fun.js && node --check src/commands/moderation.js && node --check test/storage-security.test.js && node --check test/command-registration.test.js",
     "test": "node --test"
   },
   "dependencies": {

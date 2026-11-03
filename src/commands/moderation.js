@@ -17,16 +17,20 @@ import {
 import { getCommandCooldown } from "../cooldowns.js";
 import {
   addWarning,
+  addModeratorNote,
   getTicketPanel,
   getModerationActions,
   getWarnings,
+  getModeratorNotes,
   hasModeratorRole,
   pruneAudit,
   removeWarning,
+  removeModeratorNote,
   removeTemporaryBan,
   searchAudit,
   setLogChannel,
   setModeratorRole,
+  setGuildRateLimits,
   setTicketPanel,
   removeTicketPanel,
   setTemporaryBan,
@@ -34,7 +38,10 @@ import {
 
 const messageAuditEnabled =
   process.env.ENABLE_MESSAGE_AUDIT?.toLowerCase() === "true";
-const moderatorRoleCommands = new Set(["warn", "warnings", "clearwarnings"]);
+const moderatorRoleCommands = new Set([
+  "warn", "warnings", "clearwarnings", "modnote", "modnotes",
+  "deletemodnote", "case",
+]);
 const ticketPanelWizardPrefix = "ticket-panel:";
 const ticketPanelOpenPrefix = "ticket-open:";
 const ticketPanelWizardLifetime = 10 * 60 * 1000;
@@ -989,6 +996,26 @@ export const moderationCommands = [
   },
   {
     data: new SlashCommandBuilder()
+      .setName("moderationlimits")
+      .setDescription("Configure per-minute limits for moderation actions")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addIntegerOption((option) => option.setName("user_limit").setDescription("Actions per moderator per minute (1-100)").setMinValue(1).setMaxValue(100).setRequired(true))
+      .addIntegerOption((option) => option.setName("server_limit").setDescription("Actions for the whole server per minute (1-1000)").setMinValue(10).setMaxValue(1000).setRequired(true)),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (!(await requirePermission(interaction, PermissionFlagsBits.ManageGuild, "Manage Server"))) return;
+      const userLimit = interaction.options.getInteger("user_limit", true);
+      const guildLimit = interaction.options.getInteger("server_limit", true);
+      if (guildLimit < userLimit) {
+        await interaction.reply({ content: "The server limit must be at least the per-moderator limit.", ephemeral: true });
+        return;
+      }
+      await setGuildRateLimits(interaction.guild.id, userLimit, guildLimit);
+      await interaction.reply({ content: `Moderation limits set to ${userLimit} per moderator and ${guildLimit} per server per minute.`, ephemeral: true });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
       .setName("moderatorperm")
       .setDescription("Grant or revoke warning-command access for a role")
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -1028,6 +1055,81 @@ export const moderationCommands = [
         ephemeral: true,
         allowedMentions: { parse: [] },
       });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("modnote")
+      .setDescription("Add a private staff note about a member")
+      .addUserOption((option) => option.setName("user").setDescription("Member").setRequired(true))
+      .addStringOption((option) => option.setName("note").setDescription("Staff-only note").setRequired(true).setMaxLength(1000)),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (!(await requirePermission(interaction, PermissionFlagsBits.ModerateMembers, "Moderate Members"))) return;
+      const user = interaction.options.getUser("user", true);
+      const note = interaction.options.getString("note", true).trim();
+      if (!note) {
+        await interaction.reply({ content: "Note cannot be blank.", ephemeral: true });
+        return;
+      }
+      const saved = await addModeratorNote(interaction.guild.id, user.id, interaction.user, note);
+      await interaction.reply({ content: `Saved private note \`${saved.id.slice(0, 8)}\` for **${user.tag}**.`, ephemeral: true, allowedMentions: { parse: [] } });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("modnotes")
+      .setDescription("View private staff notes about a member")
+      .addUserOption((option) => option.setName("user").setDescription("Member").setRequired(true)),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (!(await requirePermission(interaction, PermissionFlagsBits.ModerateMembers, "Moderate Members"))) return;
+      const user = interaction.options.getUser("user", true);
+      const notes = await getModeratorNotes(interaction.guild.id, user.id);
+      const text = notes.slice(-10).reverse().map((note) => `\`${note.id.slice(0, 8)}\` <t:${Math.floor(new Date(note.timestamp).getTime() / 1000)}:d> — ${note.text}`).join("\n");
+      await interaction.reply({ content: text ? `Private staff notes for **${user.tag}**:\n${text}`.slice(0, 1900) : "No private notes are recorded for this member.", ephemeral: true, allowedMentions: { parse: [] } });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("deletemodnote")
+      .setDescription("Delete a private staff note")
+      .addUserOption((option) => option.setName("user").setDescription("Member").setRequired(true))
+      .addStringOption((option) => option.setName("note_id").setDescription("First 8 characters or full note ID").setRequired(true).setMinLength(8).setMaxLength(32)),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (!(await requirePermission(interaction, PermissionFlagsBits.ModerateMembers, "Moderate Members"))) return;
+      const user = interaction.options.getUser("user", true);
+      const id = interaction.options.getString("note_id", true).toLowerCase();
+      const notes = await getModeratorNotes(interaction.guild.id, user.id);
+      const note = notes.find((item) => item.id.startsWith(id));
+      const removed = note && await removeModeratorNote(interaction.guild.id, user.id, note.id);
+      await interaction.reply({ content: removed ? "Private note deleted." : "No matching note was found.", ephemeral: true });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
+      .setName("case")
+      .setDescription("View a member's warnings, actions, and private staff notes")
+      .addUserOption((option) => option.setName("user").setDescription("Member").setRequired(true)),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (!(await requirePermission(interaction, PermissionFlagsBits.ModerateMembers, "Moderate Members"))) return;
+      const user = interaction.options.getUser("user", true);
+      const [warnings, actions, notes] = await Promise.all([
+        getWarnings(interaction.guild.id, user.id),
+        getModerationActions(interaction.guild.id, user.id),
+        getModeratorNotes(interaction.guild.id, user.id),
+      ]);
+      const details = [
+        `Warnings: ${warnings.length}`,
+        ...warnings.slice(-5).reverse().map((item) => `• ${item.reason} (<t:${Math.floor(new Date(item.timestamp).getTime() / 1000)}:d>)`),
+        `Moderation actions: ${actions.length}`,
+        ...actions.slice(-5).reverse().map((item) => `• /${item.command}: ${item.reason} (<t:${Math.floor(new Date(item.timestamp).getTime() / 1000)}:d>)`),
+        `Private notes: ${notes.length}`,
+        ...notes.slice(-5).reverse().map((item) => `• ${item.text} (<t:${Math.floor(new Date(item.timestamp).getTime() / 1000)}:d>)`),
+      ];
+      await interaction.reply({ content: `**Case history for ${user.tag}**\n${details.join("\n")}`.slice(0, 1900), ephemeral: true, allowedMentions: { parse: [] } });
     },
   },
   {

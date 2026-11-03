@@ -84,7 +84,7 @@ Need:
 | Command | Description | Required server permission |
 | --- | --- | --- |
 | `/ping` | Check the bot's response time | None |
-| `/eightball` | Ask the magic eight ball a question | None |
+| `/eightball question` | Ask the magic eight ball a question | None |
 | `/coinflip` | Flip a coin | None |
 | `/dice [sides]` | Roll a die (default d6; up to d1000) | None |
 | `/randomnumber minimum maximum` | Pick a random whole number in a range | None |
@@ -94,10 +94,16 @@ Need:
 | `/fortune` | Get a lighthearted fortune | None |
 | `/compliment` | Get a friendly compliment | None |
 | `/serverinfo` | Show information and description for this server | None |
+| `/poll question choices [hours]` | Create a multi-select poll with 2–5 choices, closing after up to 30 days | None |
 | `/clear amount` | Delete 1–100 recent messages | Manage Messages |
 | `/dm user message` | Send a private message to a server member without triggering mentions | Moderate Members |
 | `/message message` | Send a message as the bot in the current channel without triggering mentions | Manage Messages |
 | `/announce channel title message [color]` | Preview an announcement and post it to a selected text channel | Manage Messages in the selected channel |
+| `/modnote user note` | Add a private staff note about a member | Moderate Members or assigned moderator role |
+| `/modnotes user` | View private staff notes about a member | Moderate Members or assigned moderator role |
+| `/deletemodnote user note_id` | Delete a private staff note | Moderate Members or assigned moderator role |
+| `/case user` | View a member's warnings, actions, and private staff notes | Moderate Members or assigned moderator role |
+| `/moderationlimits user_limit server_limit` | Configure per-minute moderation action limits | Manage Server |
 | `/kick user [reason]` | Remove a member from the server | Kick Members |
 | `/ban user [reason]` | Ban a user from the server | Ban Members |
 | `/timeout user minutes [reason]` | Time out a member for 1–40,320 minutes | Moderate Members |
@@ -136,6 +142,11 @@ Need:
 | `/audit [phrase] [user_id]` | Search recorded message edits and deletions | View Audit Log |
 | `/cleanuplogs days` | Remove old message audit records while retaining moderation-action and warning records | Manage Server |
 | `/moderatorperm role enabled` | Grant or revoke a role's access to `/warn`, `/warnings`, and `/clearwarnings` | Manage Server |
+| `/modnote user note` | Add a private staff note about a member | Moderate Members or assigned moderator role |
+| `/modnotes user` | View private staff notes about a member | Moderate Members or assigned moderator role |
+| `/deletemodnote user note_id` | Delete a private staff note | Moderate Members or assigned moderator role |
+| `/case user` | View a member's warnings, actions, and private staff notes | Moderate Members or assigned moderator role |
+| `/moderationlimits user_limit server_limit` | Configure per-minute limits for protected moderation actions | Manage Server |
 | `/createticketpanel` | Set up and publish a ticket panel with a guided wizard | Manage Server |
 | `/ticket` | Create a private support channel | None |
 | `/closeticket` | Close a ticket you opened (or manage as a channel moderator) | Ticket opener or Manage Channels |
@@ -143,6 +154,8 @@ Need:
 `/createticketpanel` opens a private setup wizard. Enter the panel title and description, choose its public text channel, select 1–10 support roles, choose the ticket category, and select the button color and label. The bot publishes the finished panel after validating its permissions. It needs View Channel, Send Messages, and Embed Links in the panel channel, plus Manage Channels permission to create tickets in the selected category. Ticket panel settings are stored with the bot's local state; clicking a panel button creates a private ticket in the selected category and grants access to the opener and configured support roles. The wizard is private and its message is removed when setup succeeds. The existing `/ticket` command remains available for a basic ticket without a configured panel.
 
 All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. Commands have a per-user, per-command two-second cooldown. `/dm` only targets members of the current server and reports when their privacy settings block delivery. `/dm` and `/message` disable mention parsing; their message bodies are not retained in moderation logs. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. Temporary bans are serialized with unban/ban actions and invalidated when a ban is removed, preventing an old expiry from removing a later ban.
+
+`/poll` accepts choices separated by `|`, permits multiple selected choices per member, and defaults to 24 hours (up to 720 hours). Poll choices and votes are stored in the bot's local state. `/modnote`, `/modnotes`, `/deletemodnote`, and `/case` provide private staff-only notes and a combined case view; notes remain until removed. Protected moderation actions have configurable rolling per-minute limits, initially 10 actions per moderator and 60 actions per server. Use `/moderationlimits` to change those values.
 
 `/announce` lets a moderator select a text or announcement channel, enter a title and message, and optionally choose a color. The bot checks that both the moderator and bot have the required permissions in the destination, then shows a private preview with Post and Cancel buttons. Only the moderator who created the preview can use it; it expires after 10 minutes and is discarded after posting or canceling. Mention parsing is disabled for both previews and published announcements, so text such as `@everyone` will not ping members.
 

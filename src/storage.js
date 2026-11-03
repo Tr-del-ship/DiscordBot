@@ -92,6 +92,16 @@ function validateState(state) {
         (typeof guild.ticketPanels !== "object" ||
           guild.ticketPanels === null ||
           Array.isArray(guild.ticketPanels))) ||
+      (guild.polls !== undefined &&
+        (typeof guild.polls !== "object" ||
+          guild.polls === null ||
+          Array.isArray(guild.polls))) ||
+      (guild.notes !== undefined &&
+        (typeof guild.notes !== "object" ||
+          guild.notes === null ||
+          Array.isArray(guild.notes))) ||
+      (guild.ticketTranscripts !== undefined &&
+        !Array.isArray(guild.ticketTranscripts)) ||
       (guild.temporaryBans !== undefined &&
         (typeof guild.temporaryBans !== "object" ||
           guild.temporaryBans === null ||
@@ -228,6 +238,10 @@ function guildData(state, guildId) {
       audit: [],
       moderatorRoleIds: [],
       ticketPanels: {},
+      polls: {},
+      notes: {},
+      ticketTranscripts: [],
+      rateLimits: { user: 10, guild: 60 },
       temporaryBans: {},
     };
   }
@@ -238,6 +252,10 @@ function guildData(state, guildId) {
   guild.audit ??= [];
   guild.moderatorRoleIds ??= [];
   guild.ticketPanels ??= {};
+  guild.polls ??= {};
+  guild.notes ??= {};
+  guild.ticketTranscripts ??= [];
+  guild.rateLimits ??= { user: 10, guild: 60 };
   guild.temporaryBans ??= {};
   return guild;
 }
@@ -489,6 +507,76 @@ export async function removeTicketPanel(guildId, panelId) {
   return removed;
 }
 
+export async function savePoll(guildId, messageId, poll) {
+  validateSnowflake(messageId, "Poll message ID");
+  if (
+    typeof poll.question !== "string" ||
+    poll.question.length < 1 ||
+    poll.question.length > 256 ||
+    !Array.isArray(poll.options) ||
+    poll.options.length < 2 ||
+    poll.options.length > 5 ||
+    poll.options.some((option) => typeof option !== "string" || option.length > 80) ||
+    !Number.isFinite(poll.closesAt)
+  ) {
+    throw new Error("Poll settings are invalid.");
+  }
+  await updateGuild(guildId, (guild) => {
+    guild.polls[messageId] = {
+      question: poll.question,
+      options: [...poll.options],
+      closesAt: poll.closesAt,
+      votes: {},
+    };
+  });
+}
+
+export async function getPoll(guildId, messageId) {
+  validateSnowflake(messageId, "Poll message ID");
+  const state = await getState();
+  return guildData(state, guildId).polls[messageId] ?? null;
+}
+
+export async function recordPollVote(guildId, messageId, userId, optionIndexes) {
+  validateSnowflake(messageId, "Poll message ID");
+  validateSnowflake(userId, "User ID");
+  if (!Array.isArray(optionIndexes) || optionIndexes.some((n) => !Number.isInteger(n))) {
+    throw new Error("Poll vote is invalid.");
+  }
+  let poll;
+  await updateGuild(guildId, (guild) => {
+    poll = guild.polls[messageId];
+    if (!poll) return;
+    if (
+      optionIndexes.length < 1 ||
+      optionIndexes.length > poll.options.length ||
+      optionIndexes.some((n) => n < 0 || n >= poll.options.length)
+    ) {
+      throw new Error("Poll vote contains an invalid choice.");
+    }
+    poll.votes[userId] = [...new Set(optionIndexes)];
+  });
+  return poll ?? null;
+}
+
+export async function setTicketTranscriptChannel(guildId, channelId) {
+  if (channelId !== null) validateSnowflake(channelId, "Ticket transcript channel ID");
+  await updateGuild(guildId, (guild) => {
+    guild.ticketTranscriptChannelId = channelId;
+  });
+}
+
+export async function addTicketTranscript(guildId, transcript) {
+  await updateGuild(guildId, (guild) => {
+    guild.ticketTranscripts.push(transcript);
+  });
+}
+
+export async function getTicketTranscriptChannel(guildId) {
+  const state = await getState();
+  return guildData(state, guildId).ticketTranscriptChannelId ?? null;
+}
+
 export async function addAuditEvent(guildId, event) {
   await updateGuild(guildId, (guild) => {
     guild.audit.push(event);
@@ -541,6 +629,61 @@ export async function getModerationActions(guildId, userId) {
   return guildData(state, guildId).actions.filter(
     (action) => action.targetId === userId,
   );
+}
+
+export async function addModeratorNote(guildId, userId, moderator, text) {
+  validateSnowflake(userId, "User ID");
+  const note = {
+    id: randomUUID().replaceAll("-", ""),
+    userId,
+    moderatorId: moderator.id,
+    moderatorTag: moderator.tag,
+    text,
+    timestamp: new Date().toISOString(),
+  };
+  await updateGuild(guildId, (guild) => {
+    guild.notes[userId] ??= [];
+    guild.notes[userId].push(note);
+  });
+  return note;
+}
+
+export async function getModeratorNotes(guildId, userId) {
+  validateSnowflake(userId, "User ID");
+  const state = await getState();
+  return guildData(state, guildId).notes[userId] ?? [];
+}
+
+export async function removeModeratorNote(guildId, userId, noteId) {
+  validateSnowflake(userId, "User ID");
+  let removed = false;
+  await updateGuild(guildId, (guild) => {
+    const remaining = (guild.notes[userId] ?? []).filter((note) => {
+      if (note.id !== noteId) return true;
+      removed = true;
+      return false;
+    });
+    if (remaining.length) guild.notes[userId] = remaining;
+    else delete guild.notes[userId];
+  });
+  return removed;
+}
+
+export async function getGuildRateLimits(guildId) {
+  const state = await getState();
+  return { ...guildData(state, guildId).rateLimits };
+}
+
+export async function setGuildRateLimits(guildId, userLimit, guildLimit) {
+  if (!Number.isInteger(userLimit) || userLimit < 1 || userLimit > 100) {
+    throw new Error("Per-user limit must be between 1 and 100.");
+  }
+  if (!Number.isInteger(guildLimit) || guildLimit < userLimit || guildLimit > 1000) {
+    throw new Error("Server limit must be at least the per-user limit and no more than 1000.");
+  }
+  await updateGuild(guildId, (guild) => {
+    guild.rateLimits = { user: userLimit, guild: guildLimit };
+  });
 }
 
 export async function setTemporaryBan(guildId, userId, expiresAt) {

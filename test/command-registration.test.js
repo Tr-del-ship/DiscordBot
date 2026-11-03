@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChannelType } from "discord.js";
-import { funCommands } from "../src/commands/fun.js";
+import {
+  eightBallAnswerGroups,
+  funCommands,
+} from "../src/commands/fun.js";
 import {
   handleAnnouncementInteraction,
   moderationCommands,
@@ -28,6 +31,21 @@ test("includes at least five newly added fun commands", () => {
     "compliment",
   ]) {
     assert.ok(names.has(name), `Expected /${name} to be registered.`);
+  }
+});
+
+test("eight ball has equal yes and no answers", () => {
+  assert.equal(eightBallAnswerGroups.yes.length, eightBallAnswerGroups.no.length);
+});
+
+test("registers poll, private moderator note, and rate limit commands", () => {
+  const names = new Set(moderationCommands.map(({ data }) => data.name));
+  const allNames = new Set([
+    ...names,
+    ...funCommands.map(({ data }) => data.name),
+  ]);
+  for (const name of ["poll", "modnote", "modnotes", "deletemodnote", "case", "moderationlimits"]) {
+    assert.ok(allNames.has(name), `Expected /${name} to be registered.`);
   }
 });
 

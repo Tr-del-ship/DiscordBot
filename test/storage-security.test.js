@@ -5,7 +5,10 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { getCommandCooldown } from "../src/cooldowns.js";
+import {
+  getCommandCooldown,
+  getGuildActionRateLimit,
+} from "../src/cooldowns.js";
 
 const testRoot = await mkdtemp(path.join(os.tmpdir(), "discord-bot-test-"));
 const dataDirectory = path.join(testRoot, "private-state");
@@ -232,4 +235,42 @@ test("persists ticket panel settings and removes them when requested", async () 
   assert.deepEqual(await storage.getTicketPanel(guildId, panelId), panel);
   assert.equal(await storage.removeTicketPanel(guildId, panelId), true);
   assert.equal(await storage.getTicketPanel(guildId, panelId), null);
+});
+
+test("stores private moderator notes and configurable moderation limits", async () => {
+  const note = await storage.addModeratorNote(
+    guildId,
+    userId,
+    { id: "88888888888888888", tag: "mod#0001" },
+    "Follow up next week.",
+  );
+  assert.equal((await storage.getModeratorNotes(guildId, userId))[0].id, note.id);
+  assert.equal(await storage.removeModeratorNote(guildId, userId, note.id), true);
+  await storage.setGuildRateLimits(guildId, 8, 40);
+  assert.deepEqual(await storage.getGuildRateLimits(guildId), {
+    user: 8,
+    guild: 40,
+  });
+});
+
+test("enforces moderator and server action limits in a rolling minute", () => {
+  const now = 2_000_000;
+  assert.equal(getGuildActionRateLimit(userId, guildId, 1, 2, now).limited, false);
+  assert.equal(getGuildActionRateLimit(userId, guildId, 1, 2, now + 1).scope, "user");
+  assert.equal(getGuildActionRateLimit("99999999999999999", guildId, 1, 2, now + 2).limited, false);
+  assert.equal(getGuildActionRateLimit("88888888888888888", guildId, 1, 2, now + 3).scope, "guild");
+  assert.equal(getGuildActionRateLimit(userId, guildId, 1, 2, now + 60_001).limited, false);
+});
+
+test("persists poll settings and replaces a member's multi-choice vote", async () => {
+  const pollId = "99999999999999999";
+  await storage.savePoll(guildId, pollId, {
+    question: "Which features?",
+    options: ["Polls", "Tickets", "Notes"],
+    closesAt: Date.now() + 60_000,
+  });
+  let poll = await storage.recordPollVote(guildId, pollId, userId, [0, 2]);
+  assert.deepEqual(poll.votes[userId], [0, 2]);
+  poll = await storage.recordPollVote(guildId, pollId, userId, [1]);
+  assert.deepEqual(poll.votes[userId], [1]);
 });

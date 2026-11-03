@@ -22,14 +22,23 @@ import {
   removeTemporaryBan,
   withBanLock,
 } from "./storage.js";
-import { getCommandCooldown } from "./cooldowns.js";
+import {
+  getCommandCooldown,
+  getGuildActionRateLimit,
+} from "./cooldowns.js";
+import { getGuildRateLimits, hasModeratorRole } from "./storage.js";
 import { expireTemporaryBans } from "./temporary-bans.js";
+import { handlePollInteraction } from "./polls.js";
 
 const commands = [...funCommands, ...moderationCommands];
 const commandMap = new Map(
   commands.map((command) => [command.data.name, command]),
 );
 const banLifecycleCommands = new Set(["ban", "softban", "tempban", "unban"]);
+const rateLimitedCommands = new Set([
+  "kick", "ban", "timeout", "untimeout", "warn", "mute", "unmute",
+  "softban", "tempban", "unban", "clear", "cleanup", "lockdown",
+]);
 
 function readConfig() {
   const { DISCORD_TOKEN, CLIENT_ID, DISCORD_GUILD_ID } = process.env;
@@ -229,6 +238,7 @@ async function main() {
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) {
       try {
+        if (await handlePollInteraction(interaction)) return;
         if (await handleAnnouncementInteraction(interaction)) return;
         await handleTicketInteraction(interaction);
       } catch (error) {
@@ -268,6 +278,37 @@ async function main() {
           ephemeral: true,
         });
         return;
+      }
+
+      if (interaction.guild && rateLimitedCommands.has(interaction.commandName)) {
+        const requiredPermission = command.data.default_member_permissions;
+        const hasCommandPermission =
+          requiredPermission &&
+          interaction.memberPermissions?.has(requiredPermission);
+        const isConfiguredModerator = interaction.commandName === "warn" &&
+          (interaction.memberPermissions?.has("MODERATE_MEMBERS") ||
+            await hasModeratorRole(
+              interaction.guild.id,
+              [...(interaction.member?.roles?.cache?.keys?.() ?? [])],
+            ));
+        if (hasCommandPermission || isConfiguredModerator) {
+          const limits = await getGuildRateLimits(interaction.guild.id);
+          const rateLimit = getGuildActionRateLimit(
+            interaction.user.id,
+            interaction.guild.id,
+            limits.user,
+            limits.guild,
+          );
+          if (rateLimit.limited) {
+            await interaction.reply({
+              content: rateLimit.scope === "guild"
+                ? "This server has reached its moderation action limit for this minute. Please wait before trying again."
+                : "You have reached the moderation action limit for this minute. Please wait before trying again.",
+              ephemeral: true,
+            });
+            return;
+          }
+        }
       }
 
       if (!(await checkModerationTarget(interaction))) return;

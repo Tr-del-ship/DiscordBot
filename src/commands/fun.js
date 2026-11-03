@@ -1,39 +1,53 @@
 import { randomInt } from "node:crypto";
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { pollCommands } from "../polls.js";
 
 function randomItem(items) {
   return items[randomInt(items.length)];
 }
 
-const eightBallAnswers = [
-  "It is certain.",
-  "Without a doubt.",
-  "Yes, definitely.",
-  "Most likely.",
-  "Outlook good.",
-  "Ask again later.",
-  "Cannot predict that right now.",
-  "Don't count on it.",
-  "Very doubtful.",
-  "The signs point to no.",
-  "uhhhhhhh hmmmm ermm I don't know?",
-  "Maybe, but I'm not sure.",
-  "Yes",
-  "Signs point to yes with a 1000% certainty.",
-  "Very likely.",
-  "Highly likely.",
-  "No. Just no.",
-  "Absolutely not.",
-  "Definitely not.",
-  "I wouldn't bet on it.",
-  "Outlook not so good.",
-  "Certainly",
-  "Without a doubt.",
-  "It is decidedly so.",
-  "Yes, without a doubt.",
-];
+export const eightBallAnswerGroups = {
+  yes: [
+    "It is certain.",
+    "Without a doubt.",
+    "Yes, definitely.",
+    "Most likely.",
+    "Outlook good.",
+    "Yes",
+    "Signs point to yes with a 1000% certainty.",
+    "Very likely.",
+    "Highly likely.",
+    "Certainly",
+    "Without a doubt.",
+    "It is decidedly so.",
+    "Yes, without a doubt.",
+  ],
+  no: [
+    "Don't count on it.",
+    "Very doubtful.",
+    "The signs point to no.",
+    "No. Just no.",
+    "Absolutely not.",
+    "Definitely not.",
+    "I wouldn't bet on it.",
+    "Outlook not so good.",
+    "No, not this time.",
+    "The answer is no.",
+    "Very unlikely.",
+    "The signs are against it.",
+    "I don't see that happening.",
+  ],
+  uncertain: [
+    "Ask again later.",
+    "Cannot predict that right now.",
+    "uhhhhhhh hmmmm ermm I don't know?",
+    "Maybe, but I'm not sure.",
+  ],
+};
+const eightBallAnswers = Object.values(eightBallAnswerGroups).flat();
 
 export const funCommands = [
+  ...pollCommands,
   {
     data: new SlashCommandBuilder()
       .setName("ping")
