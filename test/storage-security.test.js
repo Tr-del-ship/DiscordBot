@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { after, test } from "node:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -88,6 +88,41 @@ test("restricts state storage and prevents concurrent bot writers", async () => 
   );
   assert.equal(defaultPath.status, 0, defaultPath.stderr);
   assert.ok((await stat(defaultDataDirectory)).isDirectory());
+});
+
+test("reclaims a lock left by a process that no longer exists", async () => {
+  const staleDataDirectory = path.join(testRoot, "stale-state");
+  await mkdir(staleDataDirectory);
+  const staleLockFile = path.join(staleDataDirectory, ".bot.lock");
+  await writeFile(
+    staleLockFile,
+    "2147483647:00000000-0000-4000-8000-000000000000",
+  );
+
+  const storageUrl = pathToFileURL(
+    path.resolve("src", "storage.js"),
+  ).href;
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { initializeStorage, releaseStorageLock } from ${JSON.stringify(storageUrl)}; await initializeStorage(); releaseStorageLock();`,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, BOT_DATA_DIR: staleDataDirectory },
+    },
+  );
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(
+    await stat(staleLockFile).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }),
+    null,
+  );
 });
 
 test("stores temporary ban generations and ignores stale expiry records", async () => {

@@ -273,53 +273,60 @@ async function updateGuild(guildId, update) {
 async function acquireStorageLock() {
   await ensurePrivateDirectory();
   const token = `${process.pid}:${randomUUID()}`;
-  let file;
-  try {
-    file = await open(lockFile, "wx", 0o600);
-    await file.writeFile(token, "utf8");
-    await file.sync();
-    await file.close();
-  } catch (error) {
-    if (file) {
-      await file.close().catch((closeError) => {
-        if (closeError.code !== "EBADF") throw closeError;
-      });
-      await unlink(lockFile).catch((cleanupError) => {
-        if (cleanupError.code !== "ENOENT") throw cleanupError;
-      });
-    }
-    if (error.code !== "EEXIST") throw error;
+  while (true) {
+    let file;
+    try {
+      file = await open(lockFile, "wx", 0o600);
+      await file.writeFile(token, "utf8");
+      await file.sync();
+      await file.close();
+      break;
+    } catch (error) {
+      if (file) {
+        await file.close().catch((closeError) => {
+          if (closeError.code !== "EBADF") throw closeError;
+        });
+        await unlink(lockFile).catch((cleanupError) => {
+          if (cleanupError.code !== "ENOENT") throw cleanupError;
+        });
+      }
+      if (error.code !== "EEXIST") throw error;
 
-    let lockDetails;
-    try {
-      lockDetails = await lstat(lockFile);
-    } catch (readError) {
-      throw new Error("Unable to inspect the bot data lock file.", {
-        cause: readError,
-      });
-    }
-    if (!lockDetails.isFile() || lockDetails.isSymbolicLink()) {
-      throw new Error("Bot data lock path is not a regular file.");
-    }
-    const existing = await readFile(lockFile, "utf8");
-    const match = /^(\d+):[0-9a-f-]{36}$/.exec(existing);
-    if (!match || Number(match[1]) <= 0) {
-      throw new Error(
-        "The bot data lock file is invalid; remove it only after confirming no bot process is running.",
-      );
-    }
-    try {
-      process.kill(Number(match[1]), 0);
-    } catch (processError) {
-      if (processError.code === "ESRCH") {
+      let lockDetails;
+      try {
+        lockDetails = await lstat(lockFile);
+      } catch (readError) {
+        if (readError.code === "ENOENT") continue;
+        throw new Error("Unable to inspect the bot data lock file.", {
+          cause: readError,
+        });
+      }
+      if (!lockDetails.isFile() || lockDetails.isSymbolicLink()) {
+        throw new Error("Bot data lock path is not a regular file.");
+      }
+      const existing = await readFile(lockFile, "utf8");
+      const match = /^(\d+):[0-9a-f-]{36}$/.exec(existing);
+      if (!match || Number(match[1]) <= 0) {
         throw new Error(
-          "A stale bot data lock was found. Confirm no bot is running, then remove .bot.lock from the data directory and restart.",
-          { cause: processError },
+          "The bot data lock file is invalid; remove it only after confirming no bot process is running.",
         );
       }
-      throw processError;
+      try {
+        process.kill(Number(match[1]), 0);
+      } catch (processError) {
+        if (processError.code !== "ESRCH") throw processError;
+        const current = await readFile(lockFile, "utf8").catch((readError) => {
+          if (readError.code === "ENOENT") return null;
+          throw readError;
+        });
+        if (current !== existing) continue;
+        await unlink(lockFile).catch((unlinkError) => {
+          if (unlinkError.code !== "ENOENT") throw unlinkError;
+        });
+        continue;
+      }
+      throw new Error("Another bot process is already using this data directory.");
     }
-    throw new Error("Another bot process is already using this data directory.");
   }
 
   storageLockToken = token;
