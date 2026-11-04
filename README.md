@@ -196,4 +196,4 @@ Bot state is stored outside the project in the current OS user's application-dat
 The ticket feature creates one private text channel each time `/ticket` is used. The opener and the bot can view it; grant staff access by managing the ticket channel's permissions. The opener or a member with Manage Channels can close it with `/closeticket`.
 
 
-Last updated 10/26/26.
+Last updated 11/4/26.
