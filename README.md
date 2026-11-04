@@ -1,5 +1,5 @@
 # DiscordBot
-v1.5.0
+v1.5.1
 A fast, configurable Discord bot for server moderation and a few lightweight fun commands, built with JavaScript and discord.js.
 This bot aims to be better than the Dyno bot itself, faster and including more commands.
 ## Requirements
