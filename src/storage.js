@@ -71,6 +71,11 @@ function assertPlainObject(value, label) {
   }
 }
 
+function getTicketPanelButtonLabels(panel) {
+  if (panel.buttonLabels !== undefined) return panel.buttonLabels;
+  return typeof panel.buttonLabel === "string" ? [panel.buttonLabel] : null;
+}
+
 function validateState(state) {
   assertPlainObject(state, "Bot data");
   assertPlainObject(state.guilds, "Bot data guilds");
@@ -109,6 +114,24 @@ function validateState(state) {
     ) {
       throw new Error(`Bot data for guild ${guildId} has an invalid structure.`);
     }
+    if (
+      guild.ticketTranscriptChannelId !== undefined &&
+      guild.ticketTranscriptChannelId !== null &&
+      !/^\d{17,20}$/.test(guild.ticketTranscriptChannelId)
+    ) {
+      throw new Error(`Bot data for guild ${guildId} has an invalid transcript channel ID.`);
+    }
+    for (const transcript of guild.ticketTranscripts ?? []) {
+      assertPlainObject(transcript, `Ticket transcript for guild ${guildId}`);
+      validateSnowflake(transcript.channelId, "Transcript channel ID");
+      validateSnowflake(transcript.messageId, "Transcript message ID");
+      if (
+        typeof transcript.createdAt !== "string" ||
+        !Number.isFinite(Date.parse(transcript.createdAt))
+      ) {
+        throw new Error(`Bot data for guild ${guildId} has an invalid transcript timestamp.`);
+      }
+    }
     for (const userId of Object.keys(guild.temporaryBans ?? {})) {
       if (!/^\d{17,20}$/.test(userId)) {
         throw new Error(`Bot data for guild ${guildId} has an invalid user ID.`);
@@ -121,6 +144,7 @@ function validateState(state) {
       if (panel.categoryId !== null) {
         validateSnowflake(panel.categoryId, "Ticket category ID");
       }
+      const buttonLabels = getTicketPanelButtonLabels(panel);
       if (
         !Array.isArray(panel.staffRoleIds) ||
         panel.staffRoleIds.length < 1 ||
@@ -132,9 +156,17 @@ function validateState(state) {
         typeof panel.description !== "string" ||
         panel.description.length < 1 ||
         panel.description.length > 4000 ||
-        typeof panel.buttonLabel !== "string" ||
-        panel.buttonLabel.length < 1 ||
-        panel.buttonLabel.length > 80 ||
+        !Array.isArray(buttonLabels) ||
+        buttonLabels.length < 1 ||
+        buttonLabels.length > 25 ||
+        buttonLabels.some(
+          (label) =>
+            typeof label !== "string" ||
+            label.trim().length < 1 ||
+            label.length > 80,
+        ) ||
+        new Set(buttonLabels.map((label) => label.toLowerCase())).size !==
+          buttonLabels.length ||
         !["Primary", "Secondary", "Success"].includes(panel.buttonStyle)
       ) {
         throw new Error(`Ticket panel ${panelId} has an invalid structure.`);
@@ -234,6 +266,7 @@ function guildData(state, guildId) {
     guilds[guildId] = {
       warnings: {},
       logChannelId: null,
+      ticketTranscriptChannelId: null,
       actions: [],
       audit: [],
       moderatorRoleIds: [],
@@ -248,6 +281,7 @@ function guildData(state, guildId) {
   const guild = guilds[guildId];
   guild.warnings ??= {};
   guild.logChannelId ??= null;
+  guild.ticketTranscriptChannelId ??= null;
   guild.actions ??= [];
   guild.audit ??= [];
   guild.moderatorRoleIds ??= [];
@@ -455,6 +489,31 @@ export async function getLogChannelId(guildId) {
   return guildData(state, guildId).logChannelId;
 }
 
+export async function getExpiredTicketTranscripts(
+  olderThan = Date.now() - 30 * 24 * 60 * 60 * 1000,
+) {
+  const state = await getState();
+  return Object.entries(state.guilds).flatMap(([guildId, guild]) =>
+    (guild.ticketTranscripts ?? [])
+      .filter((transcript) => Date.parse(transcript.createdAt) <= olderThan)
+      .map((transcript) => ({ guildId, ...transcript })),
+  );
+}
+
+export async function removeTicketTranscript(guildId, messageId) {
+  validateSnowflake(messageId, "Transcript message ID");
+  let removed = false;
+  await updateGuild(guildId, (guild) => {
+    const remaining = guild.ticketTranscripts.filter((transcript) => {
+      if (transcript.messageId !== messageId) return true;
+      removed = true;
+      return false;
+    });
+    guild.ticketTranscripts = remaining;
+  });
+  return removed;
+}
+
 export async function setTicketPanel(guildId, panelId, panel) {
   validateSnowflake(panelId, "Ticket panel message ID");
   validateSnowflake(panel.channelId, "Ticket panel channel ID");
@@ -471,6 +530,7 @@ export async function setTicketPanel(guildId, panelId, panel) {
   for (const roleId of panel.staffRoleIds) {
     validateSnowflake(roleId, "Ticket staff role ID");
   }
+  const buttonLabels = getTicketPanelButtonLabels(panel);
   if (
     typeof panel.title !== "string" ||
     panel.title.trim().length < 1 ||
@@ -478,9 +538,17 @@ export async function setTicketPanel(guildId, panelId, panel) {
     typeof panel.description !== "string" ||
     panel.description.trim().length < 1 ||
     panel.description.length > 4000 ||
-    typeof panel.buttonLabel !== "string" ||
-    panel.buttonLabel.trim().length < 1 ||
-    panel.buttonLabel.length > 80 ||
+    !Array.isArray(buttonLabels) ||
+    buttonLabels.length < 1 ||
+    buttonLabels.length > 25 ||
+    buttonLabels.some(
+      (label) =>
+        typeof label !== "string" ||
+        label.trim().length < 1 ||
+        label.length > 80,
+    ) ||
+    new Set(buttonLabels.map((label) => label.toLowerCase())).size !==
+      buttonLabels.length ||
     !["Primary", "Secondary", "Success"].includes(panel.buttonStyle)
   ) {
     throw new Error("Ticket panel settings are invalid.");
@@ -492,7 +560,7 @@ export async function setTicketPanel(guildId, panelId, panel) {
       staffRoleIds: [...new Set(panel.staffRoleIds)],
       title: panel.title,
       description: panel.description,
-      buttonLabel: panel.buttonLabel,
+      buttonLabels: buttonLabels.map((label) => label.trim()),
       buttonStyle: panel.buttonStyle,
     };
   });
@@ -567,15 +635,29 @@ export async function recordPollVote(guildId, messageId, userId, optionIndexes) 
 }
 
 export async function setTicketTranscriptChannel(guildId, channelId) {
-  if (channelId !== null) validateSnowflake(channelId, "Ticket transcript channel ID");
+  if (channelId !== null) {
+    validateSnowflake(channelId, "Ticket transcript channel ID");
+  }
   await updateGuild(guildId, (guild) => {
     guild.ticketTranscriptChannelId = channelId;
   });
 }
 
 export async function addTicketTranscript(guildId, transcript) {
+  validateSnowflake(transcript.channelId, "Transcript channel ID");
+  validateSnowflake(transcript.messageId, "Transcript message ID");
+  if (
+    typeof transcript.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(transcript.createdAt))
+  ) {
+    throw new Error("Ticket transcript timestamp is invalid.");
+  }
   await updateGuild(guildId, (guild) => {
-    guild.ticketTranscripts.push(transcript);
+    guild.ticketTranscripts.push({
+      channelId: transcript.channelId,
+      messageId: transcript.messageId,
+      createdAt: transcript.createdAt,
+    });
   });
 }
 

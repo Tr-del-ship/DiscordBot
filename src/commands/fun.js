@@ -200,7 +200,7 @@ export const funCommands = [
   {
     data: new SlashCommandBuilder()
       .setName("trivia")
-      .setDescription("Get a random trivia question and its answer"),
+      .setDescription("Get a random trivia question and its answer. Currently not working."),
     async execute(interaction) {
       const question = randomItem([
         {

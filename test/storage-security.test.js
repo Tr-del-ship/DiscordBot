@@ -262,7 +262,15 @@ test("persists ticket panel settings and removes them when requested", async () 
     staffRoleIds: ["66666666666666666", "77777777777777777"],
     title: "Contact support",
     description: "Click below to open a private support ticket.",
-    buttonLabel: "Open Ticket",
+    buttonLabels: [
+      "General support",
+      "Billing",
+      "Technical support",
+      "Partnerships",
+      "Account help",
+      "Report a problem",
+      "Other question",
+    ],
     buttonStyle: "Success",
   };
 
@@ -270,6 +278,36 @@ test("persists ticket panel settings and removes them when requested", async () 
   assert.deepEqual(await storage.getTicketPanel(guildId, panelId), panel);
   assert.equal(await storage.removeTicketPanel(guildId, panelId), true);
   assert.equal(await storage.getTicketPanel(guildId, panelId), null);
+});
+
+test("configures and expires ticket transcript records", async () => {
+  const transcriptChannelId = "33333333333333333";
+  const transcriptMessageId = "44444444444444444";
+  await storage.setTicketTranscriptChannel(guildId, transcriptChannelId);
+  assert.equal(
+    await storage.getTicketTranscriptChannel(guildId),
+    transcriptChannelId,
+  );
+  await storage.addTicketTranscript(guildId, {
+    channelId: transcriptChannelId,
+    messageId: transcriptMessageId,
+    createdAt: new Date(1_000).toISOString(),
+  });
+  assert.deepEqual(
+    await storage.getExpiredTicketTranscripts(2_000),
+    [{
+      guildId,
+      channelId: transcriptChannelId,
+      messageId: transcriptMessageId,
+      createdAt: new Date(1_000).toISOString(),
+    }],
+  );
+  assert.equal(
+    await storage.removeTicketTranscript(guildId, transcriptMessageId),
+    true,
+  );
+  await storage.setTicketTranscriptChannel(guildId, null);
+  assert.equal(await storage.getTicketTranscriptChannel(guildId), null);
 });
 
 test("stores private moderator notes and configurable moderation limits", async () => {

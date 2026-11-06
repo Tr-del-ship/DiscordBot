@@ -18,7 +18,9 @@ import {
   addAuditEvent,
   addModerationAction,
   getLogChannelId,
+  getExpiredTicketTranscripts,
   initializeStorage,
+  removeTicketTranscript,
   removeTemporaryBan,
   withBanLock,
 } from "./storage.js";
@@ -29,6 +31,8 @@ import {
 import { getGuildRateLimits, hasModeratorRole } from "./storage.js";
 import { expireTemporaryBans } from "./temporary-bans.js";
 import { handlePollInteraction } from "./polls.js";
+import { getClankerReply, isDirectClankerCall } from "./clanker-replies.js";
+import { loggedCommands } from "./moderation-logging.js";
 
 const commands = [...funCommands, ...moderationCommands];
 const commandMap = new Map(
@@ -39,12 +43,23 @@ const rateLimitedCommands = new Set([
   "kick", "ban", "timeout", "untimeout", "warn", "mute", "unmute",
   "softban", "tempban", "unban", "clear", "cleanup", "lockdown",
 ]);
+const clankerReplyCooldowns = new Map();
+const clankerReplyCooldownMs = 30_000;
 
 function readConfig() {
   const { DISCORD_TOKEN, CLIENT_ID, DISCORD_GUILD_ID } = process.env;
   const auditSetting = process.env.ENABLE_MESSAGE_AUDIT ?? "false";
+  const clankerSetting = process.env.ENABLE_CLANKER_REPLIES ?? "false";
+  const ticketTranscriptSetting =
+    process.env.ENABLE_TICKET_TRANSCRIPTS ?? "false";
   if (!["true", "false"].includes(auditSetting.toLowerCase())) {
     throw new Error("ENABLE_MESSAGE_AUDIT must be set to true or false.");
+  }
+  if (!["true", "false"].includes(clankerSetting.toLowerCase())) {
+    throw new Error("ENABLE_CLANKER_REPLIES must be set to true or false.");
+  }
+  if (!["true", "false"].includes(ticketTranscriptSetting.toLowerCase())) {
+    throw new Error("ENABLE_TICKET_TRANSCRIPTS must be set to true or false.");
   }
   const missing = [
     !DISCORD_TOKEN && "DISCORD_TOKEN",
@@ -62,6 +77,8 @@ function readConfig() {
     clientId: CLIENT_ID,
     guildId: DISCORD_GUILD_ID,
     messageAuditEnabled: auditSetting.toLowerCase() === "true",
+    clankerRepliesEnabled: clankerSetting.toLowerCase() === "true",
+    ticketTranscriptsEnabled: ticketTranscriptSetting.toLowerCase() === "true",
   };
 }
 
@@ -76,40 +93,6 @@ async function registerCommands({ token, clientId, guildId }) {
     `Registered ${commands.length} slash commands ${guildId ? `in guild ${guildId}` : "globally"}.`,
   );
 }
-
-const loggedCommands = new Set([
-  "clear",
-  "kick",
-  "ban",
-  "timeout",
-  "untimeout",
-  "warn",
-  "clearwarnings",
-  "dm",
-  "message",
-  "mute",
-  "unmute",
-  "deafen",
-  "undeafen",
-  "addrole",
-  "removerole",
-  "setnickname",
-  "resetnickname",
-  "slowmode",
-  "lock",
-  "unlock",
-  "lockdown",
-  "unlockdown",
-  "softban",
-  "tempban",
-  "unban",
-  "move",
-  "disconnect",
-  "createchannel",
-  "deletechannel",
-  "cleanup",
-  "purgebots",
-]);
 
 async function sendToLogChannel(client, guildId, payload) {
   const channelId = await getLogChannelId(guildId);
@@ -155,6 +138,11 @@ async function logModerationCommand(interaction, client) {
           {
             name: "Target",
             value: target ? `${target.tag} (${target.id})` : "Not specified",
+            inline: true,
+          },
+          {
+            name: "Channel",
+            value: interaction.channelId ? `<#${interaction.channelId}>` : "Unknown",
             inline: true,
           },
           { name: "Details", value: reason.slice(0, 1024) },
@@ -208,10 +196,41 @@ async function captureMessageAudit(
   });
 }
 
+async function expireTicketTranscripts(client) {
+  const expired = await getExpiredTicketTranscripts();
+  for (const transcript of expired) {
+    try {
+      const channel = await client.channels.fetch(transcript.channelId).catch((error) => {
+        if (error.code === 10003) return null;
+        throw error;
+      });
+      if (channel?.isTextBased()) {
+        const message = await channel.messages.fetch(transcript.messageId).catch((error) => {
+          if (error.code === 10008) return null;
+          throw error;
+        });
+        if (message) await message.delete();
+      }
+      await removeTicketTranscript(transcript.guildId, transcript.messageId);
+    } catch (error) {
+      console.error(
+        `Unable to remove expired ticket transcript ${transcript.messageId}:`,
+        error,
+      );
+    }
+  }
+}
+
 async function main() {
   const config = readConfig();
   const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
-  if (config.messageAuditEnabled) intents.push(GatewayIntentBits.MessageContent);
+  if (
+    config.messageAuditEnabled ||
+    config.clankerRepliesEnabled ||
+    config.ticketTranscriptsEnabled
+  ) {
+    intents.push(GatewayIntentBits.MessageContent);
+  }
   const client = new Client({ intents });
 
   client.on("error", (error) => {
@@ -233,6 +252,33 @@ async function main() {
         error,
       );
     });
+  });
+
+  client.on("messageCreate", async (message) => {
+    if (
+      !config.clankerRepliesEnabled ||
+      !message.guild ||
+      message.author.bot ||
+      !isDirectClankerCall(message.content, client.user?.id)
+    ) {
+      return;
+    }
+    const now = Date.now();
+    for (const [key, expiresAt] of clankerReplyCooldowns) {
+      if (expiresAt <= now) clankerReplyCooldowns.delete(key);
+    }
+    const key = `${message.guild.id}:${message.author.id}`;
+    if ((clankerReplyCooldowns.get(key) ?? 0) > now) return;
+    clankerReplyCooldowns.set(key, now + clankerReplyCooldownMs);
+    try {
+      await message.channel.send({
+        content: getClankerReply(),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      clankerReplyCooldowns.delete(key);
+      console.error("Unable to send clanker reply:", error);
+    }
   });
 
   client.on("interactionCreate", async (interaction) => {
@@ -391,6 +437,14 @@ async function main() {
     expireBans();
     const timer = setInterval(expireBans, 60_000);
     timer.unref();
+    const expireTranscripts = () => {
+      expireTicketTranscripts(client).catch((error) => {
+        console.error("Unable to process expired ticket transcripts:", error);
+      });
+    };
+    expireTranscripts();
+    const transcriptTimer = setInterval(expireTranscripts, 24 * 60 * 60 * 1000);
+    transcriptTimer.unref();
   });
 
   try {

@@ -52,6 +52,7 @@ test("registers poll, private moderator note, and rate limit commands", () => {
 test("registers the ticket panel setup command", () => {
   const names = new Set(moderationCommands.map(({ data }) => data.name));
   assert.ok(names.has("createticketpanel"));
+  assert.ok(names.has("tickettranscripts"));
 });
 
 test("registers a preview-first announcement command with constrained inputs", () => {

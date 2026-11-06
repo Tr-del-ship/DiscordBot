@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
@@ -33,8 +34,15 @@ import {
   setGuildRateLimits,
   setTicketPanel,
   removeTicketPanel,
+  setTicketTranscriptChannel,
+  getTicketTranscriptChannel,
+  addTicketTranscript,
   setTemporaryBan,
 } from "../storage.js";
+import {
+  collectTicketMessages,
+  formatTicketTranscript,
+} from "../ticket-transcripts.js";
 
 const messageAuditEnabled =
   process.env.ENABLE_MESSAGE_AUDIT?.toLowerCase() === "true";
@@ -44,9 +52,15 @@ const moderatorRoleCommands = new Set([
 ]);
 const ticketPanelWizardPrefix = "ticket-panel:";
 const ticketPanelOpenPrefix = "ticket-open:";
+const ticketControlPrefix = "ticket-control:";
+const ticketCloseModalPrefix = "ticket-close-reason:";
 const ticketPanelWizardLifetime = 10 * 60 * 1000;
 const ticketPanelWizards = new Map();
 const ticketCreationLocks = new Set();
+const ticketClaimLocks = new Set();
+const ticketCloseLocks = new Set();
+const ticketTranscriptsEnabled =
+  process.env.ENABLE_TICKET_TRANSCRIPTS?.toLowerCase() === "true";
 const ticketPanelButtonStyles = {
   Primary: ButtonStyle.Primary,
   Secondary: ButtonStyle.Secondary,
@@ -102,17 +116,18 @@ function createPanelIntroModal() {
     );
 }
 
-function createPanelButtonLabelModal() {
-  const label = new TextInputBuilder()
-    .setCustomId("button-label")
-    .setLabel("Button label")
-    .setStyle(TextInputStyle.Short)
-    .setMaxLength(80)
+function createPanelButtonLabelsModal() {
+  const labels = new TextInputBuilder()
+    .setCustomId("button-labels")
+    .setLabel("Button labels (separate with |)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder("General support | Billing | Technical support")
+    .setMaxLength(4000)
     .setRequired(true);
   return new ModalBuilder()
-    .setCustomId(`${ticketPanelWizardPrefix}button-label`)
-    .setTitle("Customize the ticket button")
-    .addComponents(new ActionRowBuilder().addComponents(label));
+    .setCustomId(`${ticketPanelWizardPrefix}button-labels`)
+    .setTitle("Customize ticket buttons")
+    .addComponents(new ActionRowBuilder().addComponents(labels));
 }
 
 function ticketPanelStepContent(step) {
@@ -138,6 +153,109 @@ function createTicketOpenButton(panelId, label, style, disabled = false) {
     .setLabel(label)
     .setStyle(ticketPanelButtonStyles[style])
     .setDisabled(disabled);
+}
+
+function createTicketOpenRows(panelId, labels, style, disabled = false) {
+  const buttons = labels.map((label, index) =>
+    createTicketOpenButton(
+      `${panelId}:${index}`,
+      label,
+      style,
+      disabled,
+    ),
+  );
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 5) {
+    rows.push(
+      new ActionRowBuilder().addComponents(...buttons.slice(index, index + 5)),
+    );
+  }
+  return rows;
+}
+
+function createTicketControlRow(claimedBy, disabled = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${ticketControlPrefix}claim`)
+      .setLabel(claimedBy ? `Claimed: ${claimedBy}`.slice(0, 80) : "Claim Ticket")
+      .setStyle(claimedBy ? ButtonStyle.Secondary : ButtonStyle.Primary)
+      .setDisabled(disabled || Boolean(claimedBy)),
+    new ButtonBuilder()
+      .setCustomId(`${ticketControlPrefix}close`)
+      .setLabel("Close Ticket")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(disabled),
+  );
+}
+
+function getTicketOpenerId(channel) {
+  return /^Support ticket opened by (\d{17,20})(?: \| .*)?$/.exec(
+    channel?.topic ?? "",
+  )?.[1] ?? null;
+}
+
+function getTicketClaimantId(channel) {
+  return /\| claimed by (\d{17,20})(?: \| |$)/.exec(channel?.topic ?? "")?.[1] ?? null;
+}
+
+function canCloseTicket(interaction, openerId) {
+  return (
+    interaction.user.id === openerId ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)
+  );
+}
+
+function canClaimTicket(interaction, channel) {
+  if (
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)
+  ) {
+    return true;
+  }
+  const memberRoles = interaction.member?.roles?.cache;
+  if (!memberRoles) return false;
+  return [...memberRoles.keys()].some((roleId) =>
+    channel.permissionOverwrites.cache.get(roleId)?.allow.has(
+      PermissionFlagsBits.ViewChannel,
+    ),
+  );
+}
+
+function createTicketCloseModal(controlMessageId) {
+  const reason = new TextInputBuilder()
+    .setCustomId("reason")
+    .setLabel("Reason for closing this ticket")
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(500)
+    .setRequired(true);
+  return new ModalBuilder()
+    .setCustomId(`${ticketCloseModalPrefix}${controlMessageId ?? "none"}`)
+    .setTitle("Close ticket")
+    .addComponents(new ActionRowBuilder().addComponents(reason));
+}
+
+async function findTicketControlMessage(channel) {
+  const messages = await channel.messages.fetch({ limit: 100 });
+  return messages.find((message) =>
+    message.components.some((row) =>
+      row.components.some((component) =>
+        component.customId?.startsWith(ticketControlPrefix),
+      ),
+    ),
+  ) ?? null;
+}
+
+function parseTicketButtonLabels(value) {
+  const labels = value.split("|").map((label) => label.trim());
+  if (
+    labels.length < 1 ||
+    labels.length > 25 ||
+    labels.some((label) => label.length < 1 || label.length > 80) ||
+    new Set(labels.map((label) => label.toLowerCase())).size !==
+      labels.length
+  ) {
+    return null;
+  }
+  return labels;
 }
 
 export async function handleAnnouncementInteraction(interaction) {
@@ -257,7 +375,8 @@ async function createTicketForUser(interaction, panel = {}) {
   try {
     const existingTicket = guild.channels.cache.find(
       (channel) =>
-        channel.topic === `Support ticket opened by ${interaction.user.id}`,
+        getTicketOpenerId(channel) === interaction.user.id &&
+        !channel.name.startsWith("closed-"),
     );
     if (existingTicket) {
       await interaction.reply({
@@ -313,9 +432,10 @@ async function createTicketForUser(interaction, panel = {}) {
       .join(" ");
     await channel.send({
       content: [
-        `<@${interaction.user.id}> Your ticket is open. Use /closeticket when you are finished.`,
+        `<@${interaction.user.id}> Your ticket is open. Use the buttons below to claim or close it.`,
         staffMentions,
       ].filter(Boolean).join("\n"),
+      components: [createTicketControlRow(null)],
       allowedMentions: {
         users: [interaction.user.id],
         roles: panel.staffRoleIds ?? [],
@@ -329,7 +449,211 @@ async function createTicketForUser(interaction, panel = {}) {
   }
 }
 
-async function publishTicketPanel(interaction, wizard, buttonLabel) {
+async function closeTicket(interaction, controlMessageId, reason) {
+  const channel = interaction.channel;
+  const openerId = getTicketOpenerId(channel);
+  if (
+    !interaction.guild ||
+    !channel?.isTextBased() ||
+    !openerId ||
+    channel.name.startsWith("closed-")
+  ) {
+    await interaction.reply({
+      content: "This channel is not an open ticket.",
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!canCloseTicket(interaction, openerId)) {
+    await interaction.reply({
+      content: "Only the ticket opener or a channel manager can close this ticket.",
+      ephemeral: true,
+    });
+    return;
+  }
+  if (ticketCloseLocks.has(channel.id)) {
+    await interaction.reply({
+      content: "This ticket is already being closed.",
+      ephemeral: true,
+    });
+    return;
+  }
+  ticketCloseLocks.add(channel.id);
+
+  const delivery = [];
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    const originalChannelName = channel.name;
+    const writableOverwrites = [...channel.permissionOverwrites.cache.values()]
+      .filter((overwrite) =>
+        overwrite.id !== interaction.client.user.id &&
+        overwrite.id !== interaction.guild.id &&
+        overwrite.allow.has(PermissionFlagsBits.ViewChannel),
+      );
+    for (const overwrite of writableOverwrites) {
+      await channel.permissionOverwrites.edit(overwrite.id, {
+        SendMessages: false,
+      });
+    }
+    await channel.permissionOverwrites.edit(openerId, {
+      SendMessages: false,
+    });
+    await channel.setName(`closed-${channel.name}`.slice(0, 100));
+    await channel.setTopic(
+      `${channel.topic} | closed by ${interaction.user.id}`,
+    );
+
+    const claimedById = getTicketClaimantId(channel);
+    if (controlMessageId && controlMessageId !== "none") {
+      try {
+        const controlMessage = await channel.messages
+          .fetch(controlMessageId)
+          .catch((error) => {
+            if (error.code === 10008) return null;
+            throw error;
+          });
+        if (controlMessage) {
+          const claimedBy = claimedById
+            ? await interaction.guild.members
+              .fetch(claimedById)
+              .then((member) => member.displayName)
+              .catch(() => "Staff")
+            : null;
+          await controlMessage.edit({
+            components: [createTicketControlRow(claimedBy, true)],
+          });
+        }
+      } catch (error) {
+        console.error(`Unable to disable closed ticket controls in ${channel.id}:`, error);
+      }
+    }
+
+    if (ticketTranscriptsEnabled) {
+      const transcriptChannelId = await getTicketTranscriptChannel(
+        interaction.guild.id,
+      );
+      if (!transcriptChannelId) {
+        delivery.push("No transcript was saved: configure `/tickettranscripts` first.");
+      } else {
+        try {
+          const transcriptChannel = await interaction.guild.channels.fetch(
+            transcriptChannelId,
+          );
+          const botMember =
+            interaction.guild.members.me ??
+            await interaction.guild.members.fetchMe();
+          const everyoneCanView = transcriptChannel?.permissionsFor(
+            interaction.guild.roles.everyone,
+          )?.has(PermissionFlagsBits.ViewChannel);
+          if (
+            !transcriptChannel ||
+            transcriptChannel.type !== ChannelType.GuildText ||
+            everyoneCanView ||
+            !transcriptChannel.permissionsFor(botMember)?.has([
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.AttachFiles,
+            ])
+          ) {
+            throw new Error(
+              "The configured ticket transcript channel is missing, public, or not writable by the bot.",
+            );
+          }
+          const history = await collectTicketMessages(channel);
+          const transcript = formatTicketTranscript(
+            history.messages,
+            {
+              guildName: interaction.guild.name,
+              channelName: originalChannelName,
+              openerId,
+              closerId: interaction.user.id,
+              reason,
+              closedAt: new Date(),
+            },
+            history.truncated,
+          );
+          const transcriptName = `ticket-${channel.id}-transcript.txt`;
+          try {
+            const transcriptMessage = await transcriptChannel.send({
+              content: `Ticket transcript for <#${channel.id}>. It will be removed after 30 days.`,
+              files: [
+                new AttachmentBuilder(transcript.content, {
+                  name: transcriptName,
+                }),
+              ],
+              allowedMentions: { parse: [] },
+            });
+            delivery.push(`Transcript saved in <#${transcriptChannel.id}>.`);
+            try {
+              await addTicketTranscript(interaction.guild.id, {
+                channelId: transcriptChannel.id,
+                messageId: transcriptMessage.id,
+                createdAt: new Date().toISOString(),
+              });
+            } catch (error) {
+              console.error(
+                `Unable to track transcript retention for ${transcriptMessage.id}:`,
+                error,
+              );
+              delivery.push("Automatic 30-day transcript cleanup could not be recorded.");
+            }
+          } catch (error) {
+            console.error(`Unable to save ticket transcript ${channel.id}:`, error);
+            delivery.push("Could not save the transcript to the configured channel.");
+          }
+
+          try {
+            const opener = await interaction.client.users.fetch(openerId);
+            const dmMessage = await opener.send({
+              content: `Your ticket in **${interaction.guild.name}** has been closed. Here is its transcript.`,
+              files: [
+                new AttachmentBuilder(transcript.content, {
+                  name: transcriptName,
+                }),
+              ],
+              allowedMentions: { parse: [] },
+            });
+            delivery.push("Transcript sent to the ticket opener by DM.");
+            try {
+              await addTicketTranscript(interaction.guild.id, {
+                channelId: dmMessage.channelId,
+                messageId: dmMessage.id,
+                createdAt: new Date().toISOString(),
+              });
+            } catch (error) {
+              console.error(
+                `Unable to track transcript DM retention for ${dmMessage.id}:`,
+                error,
+              );
+              delivery.push("Automatic 30-day cleanup of the DM copy could not be recorded.");
+            }
+          } catch (error) {
+            console.error(`Unable to DM ticket transcript to ${openerId}:`, error);
+            delivery.push("Could not DM the transcript to the opener; their DMs may be closed.");
+          }
+        } catch (error) {
+          console.error(`Unable to generate ticket transcript ${channel.id}:`, error);
+          delivery.push("Could not generate the transcript; check ticket history permissions.");
+        }
+      }
+    } else {
+      delivery.push(
+        "Transcripts are disabled. Set ENABLE_TICKET_TRANSCRIPTS=true and enable Message Content Intent to turn them on.",
+      );
+    }
+
+    await interaction.editReply(
+      {
+        content: [`Ticket closed and archived. Reason: ${reason}`, ...delivery].join("\n"),
+        allowedMentions: { parse: [] },
+      },
+    );
+  } finally {
+    ticketCloseLocks.delete(channel.id);
+  }
+}
+
+async function publishTicketPanel(interaction, wizard, buttonLabels) {
   const guild = interaction.guild;
   const panelChannel = await guild.channels.fetch(wizard.channelId);
   if (
@@ -372,9 +696,6 @@ async function publishTicketPanel(interaction, wizard, buttonLabel) {
     throw new Error("One or more selected staff roles are no longer available.");
   }
 
-  const initialRow = new ActionRowBuilder().addComponents(
-    createTicketOpenButton("pending", buttonLabel, wizard.buttonStyle, true),
-  );
   const panelMessage = await panelChannel.send({
     embeds: [
       new EmbedBuilder()
@@ -382,7 +703,12 @@ async function publishTicketPanel(interaction, wizard, buttonLabel) {
         .setTitle(wizard.title)
         .setDescription(wizard.description),
     ],
-    components: [initialRow],
+    components: createTicketOpenRows(
+      "pending",
+      buttonLabels,
+      wizard.buttonStyle,
+      true,
+    ),
     allowedMentions: { parse: [] },
   });
   let settingsStored = false;
@@ -393,20 +719,16 @@ async function publishTicketPanel(interaction, wizard, buttonLabel) {
       staffRoleIds: wizard.staffRoleIds,
       title: wizard.title,
       description: wizard.description,
-      buttonLabel,
+      buttonLabels,
       buttonStyle: wizard.buttonStyle,
     });
     settingsStored = true;
     await panelMessage.edit({
-      components: [
-        new ActionRowBuilder().addComponents(
-          createTicketOpenButton(
-            panelMessage.id,
-            buttonLabel,
-            wizard.buttonStyle,
-          ),
-        ),
-      ],
+      components: createTicketOpenRows(
+        panelMessage.id,
+        buttonLabels,
+        wizard.buttonStyle,
+      ),
     });
   } catch (error) {
     if (settingsStored) {
@@ -425,8 +747,133 @@ async function publishTicketPanel(interaction, wizard, buttonLabel) {
 }
 
 export async function handleTicketInteraction(interaction) {
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith(ticketControlPrefix)
+  ) {
+    const channel = interaction.channel;
+    const openerId = getTicketOpenerId(channel);
+    if (
+      !interaction.guild ||
+      !channel?.isTextBased() ||
+      !openerId ||
+      channel.name.startsWith("closed-")
+    ) {
+      await interaction.reply({
+        content: "This ticket is no longer open.",
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    const action = interaction.customId.slice(ticketControlPrefix.length);
+    if (action === "close") {
+      if (!canCloseTicket(interaction, openerId)) {
+        await interaction.reply({
+          content: "Only the ticket opener or a channel manager can close this ticket.",
+          ephemeral: true,
+        });
+        return true;
+      }
+      await interaction.showModal(createTicketCloseModal(interaction.message.id));
+      return true;
+    }
+    if (action !== "claim") {
+      await interaction.reply({
+        content: "That ticket action is not valid.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    if (!canClaimTicket(interaction, channel)) {
+      await interaction.reply({
+        content: "Only ticket staff or a channel manager can claim this ticket.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    if (ticketClaimLocks.has(channel.id)) {
+      await interaction.reply({
+        content: "Someone is already claiming this ticket. Please try again.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    if (getTicketClaimantId(channel)) {
+      await interaction.reply({
+        content: "This ticket has already been claimed.",
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    ticketClaimLocks.add(channel.id);
+    try {
+      const currentTopic = channel.topic;
+      if (getTicketClaimantId(channel)) {
+        await interaction.reply({
+          content: "This ticket has already been claimed.",
+          ephemeral: true,
+        });
+        return true;
+      }
+      await channel.setTopic(`${currentTopic} | claimed by ${interaction.user.id}`);
+      await interaction.message.edit({
+        components: [
+          createTicketControlRow(interaction.member.displayName),
+        ],
+      });
+      await interaction.reply({
+        content: "You claimed this ticket.",
+        ephemeral: true,
+      });
+    } finally {
+      ticketClaimLocks.delete(channel.id);
+    }
+    return true;
+  }
+
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith(ticketCloseModalPrefix)
+  ) {
+    const controlMessageId = interaction.customId.slice(
+      ticketCloseModalPrefix.length,
+    );
+    if (controlMessageId !== "none" && !/^\d{17,20}$/.test(controlMessageId)) {
+      await interaction.reply({
+        content: "This ticket close request is invalid.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    const reason = interaction.fields.getTextInputValue("reason").trim();
+    if (!reason) {
+      await interaction.reply({
+        content: "Please provide a reason for closing this ticket.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    await closeTicket(interaction, controlMessageId, reason);
+    return true;
+  }
+
   if (interaction.isButton() && interaction.customId.startsWith(ticketPanelOpenPrefix)) {
-    const panelId = interaction.customId.slice(ticketPanelOpenPrefix.length);
+    const [panelId, buttonIndex, ...unexpectedParts] = interaction.customId
+      .slice(ticketPanelOpenPrefix.length)
+      .split(":");
+    if (
+      !/^\d{17,20}$/.test(panelId) ||
+      unexpectedParts.length > 0 ||
+      (buttonIndex !== undefined && !/^(?:[0-9]|1[0-9]|2[0-4])$/.test(buttonIndex))
+    ) {
+      await interaction.reply({
+        content: "This ticket button is invalid.",
+        ephemeral: true,
+      });
+      return true;
+    }
     if (!interaction.guild) {
       await interaction.reply({
         content: "Ticket panels can only be used in a server.",
@@ -438,6 +885,17 @@ export async function handleTicketInteraction(interaction) {
     if (!panel) {
       await interaction.reply({
         content: "This ticket panel is no longer configured.",
+        ephemeral: true,
+      });
+      return true;
+    }
+    const buttonLabels = panel.buttonLabels ?? [panel.buttonLabel];
+    if (
+      buttonIndex !== undefined &&
+      Number(buttonIndex) >= buttonLabels.length
+    ) {
+      await interaction.reply({
+        content: "This ticket button is no longer configured.",
         ephemeral: true,
       });
       return true;
@@ -576,18 +1034,20 @@ export async function handleTicketInteraction(interaction) {
   ) {
     wizard.buttonStyle = interaction.values[0];
     wizard.lastInteraction = interaction;
-    await interaction.showModal(createPanelButtonLabelModal());
+    await interaction.showModal(createPanelButtonLabelsModal());
     return true;
   }
 
   if (
     interaction.isModalSubmit() &&
-    interaction.customId === `${ticketPanelWizardPrefix}button-label`
+    interaction.customId === `${ticketPanelWizardPrefix}button-labels`
   ) {
-    const buttonLabel = interaction.fields.getTextInputValue("button-label").trim();
-    if (!buttonLabel) {
+    const buttonLabels = parseTicketButtonLabels(
+      interaction.fields.getTextInputValue("button-labels"),
+    );
+    if (!buttonLabels) {
       await interaction.reply({
-        content: "The button label cannot be blank. Run /createticketpanel to try again.",
+        content: "Enter 1–25 unique, non-empty button labels, separated by |. Each label can be up to 80 characters.",
         ephemeral: true,
       });
       ticketPanelWizards.delete(key);
@@ -595,7 +1055,7 @@ export async function handleTicketInteraction(interaction) {
     }
     await interaction.deferReply({ ephemeral: true });
     try {
-      await publishTicketPanel(interaction, wizard, buttonLabel);
+      await publishTicketPanel(interaction, wizard, buttonLabels);
       ticketPanelWizards.delete(key);
       await wizard.lastInteraction.deleteReply().catch((error) => {
         console.error("Unable to remove completed ticket panel setup:", error);
@@ -1171,31 +1631,96 @@ export const moderationCommands = [
   },
   {
     data: new SlashCommandBuilder()
+      .setName("tickettranscripts")
+      .setDescription("Configure the private channel for ticket transcripts")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName("channel")
+          .setDescription("Private text channel; omit to disable transcript delivery")
+          .addChannelTypes(ChannelType.GuildText),
+      ),
+    async execute(interaction) {
+      if (!(await requireGuild(interaction))) return;
+      if (
+        !(await requirePermission(
+          interaction,
+          PermissionFlagsBits.ManageGuild,
+          "Manage Server",
+        ))
+      ) {
+        return;
+      }
+      const channel = interaction.options.getChannel("channel");
+      if (!channel) {
+        await setTicketTranscriptChannel(interaction.guild.id, null);
+        await interaction.reply({
+          content: "Ticket transcript delivery to a channel is disabled.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const everyoneCanView = channel.permissionsFor(
+        interaction.guild.roles.everyone,
+      )?.has(PermissionFlagsBits.ViewChannel);
+      const botMember =
+        interaction.guild.members.me ??
+        await interaction.guild.members.fetchMe();
+      if (everyoneCanView) {
+        await interaction.reply({
+          content: "The transcript channel must be private so @everyone cannot view it.",
+          ephemeral: true,
+        });
+        return;
+      }
+      if (
+        !channel.permissionsFor(botMember)?.has([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+        ])
+      ) {
+        await interaction.reply({
+          content: "The bot needs View Channel, Send Messages, and Attach Files in the transcript channel.",
+          ephemeral: true,
+        });
+        return;
+      }
+      await setTicketTranscriptChannel(interaction.guild.id, channel.id);
+      await interaction.reply({
+        content: ticketTranscriptsEnabled
+          ? `Ticket transcripts will be delivered to <#${channel.id}> and kept there for 30 days.`
+          : `Saved <#${channel.id}>. Transcripts remain disabled until ENABLE_TICKET_TRANSCRIPTS=true and Message Content Intent are enabled.`,
+        ephemeral: true,
+      });
+    },
+  },
+  {
+    data: new SlashCommandBuilder()
       .setName("closeticket")
       .setDescription("Close the private ticket in this channel"),
     async execute(interaction) {
       if (!(await requireGuild(interaction))) return;
       const channel = interaction.channel;
-      const isTicket = channel?.name.startsWith("ticket-") &&
-        channel.topic?.startsWith("Support ticket opened by ");
-      const isOwner = channel?.topic === `Support ticket opened by ${interaction.user.id}`;
-      const canManage = interaction.memberPermissions?.has(
-        PermissionFlagsBits.ManageChannels,
-      );
-      if (!isTicket || (!isOwner && !canManage)) {
+      const openerId = getTicketOpenerId(channel);
+      if (!openerId || channel.name.startsWith("closed-")) {
+        await interaction.reply({
+          content: "This channel is not an open ticket.",
+          ephemeral: true,
+        });
+        return;
+      }
+      if (!canCloseTicket(interaction, openerId)) {
         await interaction.reply({
           content: "Only the ticket opener or a channel manager can close this ticket.",
           ephemeral: true,
         });
         return;
       }
-      await interaction.deferReply();
-      await interaction.editReply("Closing this ticket in 5 seconds.");
-      setTimeout(() => {
-        channel.delete("Ticket closed").catch((error) => {
-          console.error(`Unable to delete ticket channel ${channel.id}:`, error);
-        });
-      }, 5000);
+      const controlMessage = await findTicketControlMessage(channel);
+      await interaction.showModal(
+        createTicketCloseModal(controlMessage?.id ?? "none"),
+      );
     },
   },
   {
@@ -2757,7 +3282,7 @@ export const moderationCommands = [
 
       await member.voice.disconnect(interaction.options.getString("reason") ?? undefined);
       await interaction.reply({
-        content: `📞 Disconnected **${user.tag}** from voice.`,
+        content: `📞 Goodbye! Disconnected **${user.tag}** from voice.`,
         ephemeral: false,
       });
     },
@@ -3035,7 +3560,7 @@ export const moderationCommands = [
 
       await channel.bulkDelete(botMessages, true);
       await interaction.reply({
-        content: `🤖 Deleted ${botMessages.length} bot message${botMessages.length === 1 ? "" : "s"}.`,
+        content: `🤖 Be gone! Deleted ${botMessages.length} bot message${botMessages.length === 1 ? "" : "s"}.`,
         ephemeral: false,
       });
     },

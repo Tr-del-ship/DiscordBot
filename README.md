@@ -1,5 +1,5 @@
 # DiscordBot
-v1.5.1
+v1.6.0
 A fast, configurable Discord bot for server moderation and a few lightweight fun commands, built with JavaScript and discord.js.
 This bot aims to be better than the Dyno bot itself, faster and including more commands.
 ## Requirements
@@ -38,13 +38,17 @@ Please view [Bot Permissions](https://github.com/Tr-del-ship/DiscordBot/blob/cod
    DISCORD_GUILD_ID=your_test_server_id
    # Optional: enable message edit/delete auditing
    ENABLE_MESSAGE_AUDIT=false
+   # Optional: reply to direct bot mentions containing "clanker"
+   ENABLE_CLANKER_REPLIES=false
+   # Optional: generate ticket transcripts on close (requires Message Content Intent)
+   ENABLE_TICKET_TRANSCRIPTS=false
    # Optional: absolute path for bot state; otherwise the OS user-data folder is used
    BOT_DATA_DIR=
    ```
 
    Keep `.env` private; it is excluded from Git.
 
-3. In the Developer Portal, enable the **bot** and **applications.commands** scopes when generating an invite link. For message auditing, set `ENABLE_MESSAGE_AUDIT=true` in `.env` and enable **Message Content Intent** under **Bot > Privileged Gateway Intents**, then restart the bot and configure `/createlogchannel`. Without that setting, the bot does not request the privileged intent and only moderation actions are logged. Invite the bot to your server and grant only the permissions it needs; do not grant Administrator unless you specifically need it.
+3. In the Developer Portal, enable the **bot** and **applications.commands** scopes when generating an invite link. Message auditing, automatic clanker replies, and ticket transcripts are off by default. To enable any of them, set the corresponding `ENABLE_MESSAGE_AUDIT`, `ENABLE_CLANKER_REPLIES`, or `ENABLE_TICKET_TRANSCRIPTS` setting to `true` in `.env` and enable **Message Content Intent** under **Bot > Privileged Gateway Intents**. For audit logging, configure `/createlogchannel`; for ticket transcripts, configure `/tickettranscripts` with a private text channel. Invite the bot to your server and grant only the permissions it needs; do not grant Administrator unless you specifically need it.
 
 4. Start the bot:
 
@@ -142,14 +146,17 @@ Need:
 | `/case user` | View a member's warnings, actions, and private staff notes | Moderate Members or assigned moderator role |
 | `/moderationlimits user_limit server_limit` | Configure per-minute limits for protected moderation actions | Manage Server |
 | `/createticketpanel` | Set up and publish a ticket panel with a guided wizard | Manage Server |
+| `/tickettranscripts [channel]` | Set a private transcript channel or disable transcript-channel delivery | Manage Server |
 | `/ticket` | Create a private support channel | None |
-| `/closeticket` | Close a ticket you opened (or manage as a channel moderator) | Ticket opener or Manage Channels |
+| `/closeticket` | Open the reason prompt to close a ticket | Ticket opener or Manage Channels |
 
-`/createticketpanel` opens a private setup wizard. Enter the panel title and description, choose its public text channel, select 1–10 support roles, choose the ticket category, and select the button color and label. The bot publishes the finished panel after validating its permissions. It needs View Channel, Send Messages, and Embed Links in the panel channel, plus Manage Channels permission to create tickets in the selected category. Ticket panel settings are stored with the bot's local state; clicking a panel button creates a private ticket in the selected category and grants access to the opener and configured support roles. The wizard is private and its message is removed when setup succeeds. The existing `/ticket` command remains available for a basic ticket without a configured panel.
+`/createticketpanel` opens a private setup wizard. Enter the panel title and description, choose its public text channel, select 1–10 support roles, choose the ticket category and button color, then enter 1–25 unique button labels separated by `|` (for example, `General support | Billing | Technical help`). Buttons are arranged across rows, with up to five per row. The bot publishes the finished panel after validating its permissions. It needs View Channel, Send Messages, and Embed Links in the panel channel, plus Manage Channels permission to create tickets in the selected category. Ticket panel settings are stored with the bot's local state; clicking any panel button creates a private ticket in the selected category and grants access to the opener and configured support roles. New tickets include **Claim Ticket** and **Close Ticket** buttons. Only ticket staff (a configured support role or Manage Channels) can claim; the opener or a channel manager can close, then must enter a reason. Closing archives/locks the channel rather than deleting it. With transcripts enabled and a private transcript channel configured, the bot creates a text transcript and sends it to the opener by DM and to the transcript channel; both bot-sent copies are scheduled for deletion after 30 days. Transcript generation requires `ENABLE_TICKET_TRANSCRIPTS=true`, Message Content Intent enabled in the Developer Portal, and View Channel, Read Message History, and Attach Files access. The wizard is private and its message is removed when setup succeeds. The existing `/ticket` command remains available for a basic ticket without a configured panel.
 
 All moderation commands are restricted to servers. The bot checks the invoking member's permission, prevents self-targeting, and enforces member and role hierarchy checks before moderation actions. Commands have a per-user, per-command two-second cooldown. `/dm` only targets members of the current server and reports when their privacy settings block delivery. `/dm` and `/message` disable mention parsing; their message bodies are not retained in moderation logs. The configured log channel is optional; message content auditing begins only when both `ENABLE_MESSAGE_AUDIT=true` and `/createlogchannel` are configured, and requires the Message Content privileged intent. Temporary bans are serialized with unban/ban actions and invalidated when a ban is removed, preventing an old expiry from removing a later ban.
 
-`/poll` accepts choices separated by `|`, permits multiple selected choices per member, and defaults to 24 hours (up to 720 hours). Poll choices and votes are stored in the bot's local state. `/modnote`, `/modnotes`, `/deletemodnote`, and `/case` provide private staff-only notes and a combined case view; notes remain until removed. Protected moderation actions have configurable rolling per-minute limits, initially 10 actions per moderator and 60 actions per server. Use `/moderationlimits` to change those values.
+`/poll` accepts choices separated by `|`, permits multiple selected choices per member, and defaults to 24 hours (up to 720 hours). Poll choices and votes are stored in the bot's local state. `/modnote`, `/modnotes`, `/deletemodnote`, and `/case` provide private staff-only notes and a combined case view; notes remain until removed. Protected moderation actions have configurable rolling per-minute limits, initially 10 actions per moderator and 60 actions per server. Use `/moderationlimits` to change those values. Successful invocations of moderation, staff-record, audit, poll, and announcement commands are sent to the configured moderation log channel; logs record command and actor details, not private-note text, poll contents, or message bodies.
+
+Set `ENABLE_CLANKER_REPLIES=true` and enable Message Content Intent to have the bot respond in the server when a member directly mentions it and uses the word “clanker”. It chooses from several lighthearted replies and limits each member to one reply every 30 seconds. Message text is used to detect the trigger but is not stored by this feature.
 
 `/announce` lets a moderator select a text or announcement channel, enter a title and message, and optionally choose a color. The bot checks that both the moderator and bot have the required permissions in the destination, then shows a private preview with Post and Cancel buttons. Only the moderator who created the preview can use it; it expires after 10 minutes and is discarded after posting or canceling. Mention parsing is disabled for both previews and published announcements, so text such as `@everyone` will not ping members.
 
@@ -189,7 +196,9 @@ Your bot code requires permission to read server data (like tracking member join
 
 ## Data and privacy notes
 
-Message audit logging is off until `ENABLE_MESSAGE_AUDIT=true`, the Message Content privileged intent is enabled in Discord, and a server manager selects a log channel with `/createlogchannel`. After activation, message edits and deletions are saved locally so `/audit` can search them (up to the newest 10,000 records per server). Use `/removelogchannel` to stop collection and `/cleanuplogs` to remove old message audit records.
+Message audit logging is off until `ENABLE_MESSAGE_AUDIT=true`, the Message Content privileged intent is enabled in Discord, and a server manager selects a log channel with `/createlogchannel`. After activation, message edits and deletions are saved locally so `/audit` can search them (up to the newest 10,000 records per server). Use `/removelogchannel` to stop collection and `/cleanuplogs` to remove old message audit records. Automatic clanker replies are separately opt-in through `ENABLE_CLANKER_REPLIES=true`; they read message text for direct bot mentions containing the trigger word but do not store message content.
+
+Ticket transcript generation is off by default. Enable `ENABLE_TICKET_TRANSCRIPTS=true`, enable Message Content Intent in the Developer Portal, and configure a private text channel with `/tickettranscripts`. On close, the bot sends a text transcript to the opener and that private channel; bot-sent copies in both destinations are scheduled for deletion after 30 days. If transcripts are disabled or no channel is configured, tickets still close and archive, and the bot reports that no transcript was saved.
 
 Bot state is stored outside the project in the current OS user's application-data/state directory, unless an absolute `BOT_DATA_DIR` path is configured. On first startup, legacy `data/bot-data.json` is migrated to the new location and the old file is removed after a successful copy. On POSIX systems the bot restricts its data directory to owner-only (`0700`) and state/lock files to owner read/write (`0600`). Windows relies on the ACLs inherited from the user's profile directory. The bot uses an exclusive lock to prevent multiple processes from writing the same JSON store. If a crash leaves a `.bot.lock` for a process that no longer exists, startup now removes that stale lock and retries automatically. An invalid lock file still requires manual removal after confirming no bot process is running. This location change is not encryption: anyone with access to the host account can access the data. Use full-disk encryption, restrict host account access, and protect backups. The `.env` file and bot token must also be kept private.
 
