@@ -9,6 +9,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { readFileSync, unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +60,29 @@ let statePromise;
 let writeQueue = Promise.resolve();
 let storageLockToken;
 const keyedLocks = new Map();
+
+function windowsProcessExists(pid) {
+  const output = execFileSync(
+    path.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "tasklist.exe",
+    ),
+    ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 5_000,
+    },
+  );
+  return output.split(/\r?\n/).some((line) => {
+    const match = /^"([^"]+)","(\d+)"/.exec(line.trim());
+    return (
+      match?.[2] === String(pid) &&
+      match[1].toLowerCase() === "node.exe"
+    );
+  });
+}
 
 function assertPlainObject(value, label) {
   if (
@@ -349,12 +373,29 @@ async function acquireStorageLock() {
         process.kill(Number(match[1]), 0);
       } catch (processError) {
         if (processError.code === "EPERM") {
-          throw new Error(
-            `The operating system could not verify whether process ${match[1]} still owns the bot data lock. Check Task Manager or your process monitor for that process; if no bot is running, remove .bot.lock from ${dataDirectory} and restart.`,
-            { cause: processError },
-          );
+          if (process.platform !== "win32") {
+            throw new Error(
+              `Unable to verify whether process ${match[1]} owns the bot data lock.`,
+              { cause: processError },
+            );
+          }
+          let processExists;
+          try {
+            processExists = windowsProcessExists(match[1]);
+          } catch (checkError) {
+            throw new Error(
+              `Unable to check whether process ${match[1]} owns the bot data lock using Windows Task List. The lock was left in place.`,
+              { cause: checkError },
+            );
+          }
+          if (processExists) {
+            throw new Error("Another bot process is already using this data directory.", {
+              cause: processError,
+            });
+          }
+        } else if (processError.code !== "ESRCH") {
+          throw processError;
         }
-        if (processError.code !== "ESRCH") throw processError;
         const current = await readFile(lockFile, "utf8").catch((readError) => {
           if (readError.code === "ENOENT") return null;
           throw readError;

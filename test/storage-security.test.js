@@ -125,13 +125,15 @@ test("reclaims a lock left by a process that no longer exists", async () => {
   );
 });
 
-test("explains EPERM when the lock owner process cannot be checked", async () => {
+test("reclaims a Windows lock when tasklist confirms its owner is gone", {
+  skip: process.platform !== "win32",
+}, async () => {
   const lockedDataDirectory = path.join(testRoot, "unverifiable-lock-state");
   await mkdir(lockedDataDirectory);
   const lockFile = path.join(lockedDataDirectory, ".bot.lock");
   await writeFile(
     lockFile,
-    "1234:00000000-0000-4000-8000-000000000000",
+    "2147483647:00000000-0000-4000-8000-000000000000",
   );
   const storageUrl = pathToFileURL(
     path.resolve("src", "storage.js"),
@@ -141,7 +143,39 @@ test("explains EPERM when the lock owner process cannot be checked", async () =>
     [
       "--input-type=module",
       "-e",
-      `process.kill = () => { const error = new Error("operation not permitted"); error.code = "EPERM"; throw error; }; import(${JSON.stringify(storageUrl)}).then(({ initializeStorage }) => initializeStorage());`,
+      `process.kill = () => { const error = new Error("operation not permitted"); error.code = "EPERM"; throw error; }; import(${JSON.stringify(storageUrl)}).then(async ({ initializeStorage, releaseStorageLock }) => { await initializeStorage(); releaseStorageLock(); });`,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, BOT_DATA_DIR: lockedDataDirectory },
+    },
+  );
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(
+    await stat(lockFile).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }),
+    null,
+  );
+});
+
+test("keeps a Windows lock when tasklist confirms its owner is still running", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const lockedDataDirectory = path.join(testRoot, "active-unverifiable-lock");
+  await mkdir(lockedDataDirectory);
+  const lockFile = path.join(lockedDataDirectory, ".bot.lock");
+  const storageUrl = pathToFileURL(
+    path.resolve("src", "storage.js"),
+  ).href;
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const fs = await import("node:fs/promises"); await fs.writeFile(process.env.BOT_DATA_DIR + "/.bot.lock", process.pid + ":00000000-0000-4000-8000-000000000000"); process.kill = () => { const error = new Error("operation not permitted"); error.code = "EPERM"; throw error; }; const { initializeStorage } = await import(${JSON.stringify(storageUrl)}); await initializeStorage();`,
     ],
     {
       encoding: "utf8",
@@ -150,8 +184,7 @@ test("explains EPERM when the lock owner process cannot be checked", async () =>
   );
 
   assert.equal(child.status, 1);
-  assert.match(child.stderr, /could not verify whether process 1234/);
-  assert.match(child.stderr, /remove \.bot\.lock/);
+  assert.match(child.stderr, /Another bot process is already using this data directory/);
   assert.ok((await stat(lockFile)).isFile());
 });
 
