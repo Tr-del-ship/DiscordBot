@@ -125,6 +125,36 @@ test("reclaims a lock left by a process that no longer exists", async () => {
   );
 });
 
+test("explains EPERM when the lock owner process cannot be checked", async () => {
+  const lockedDataDirectory = path.join(testRoot, "unverifiable-lock-state");
+  await mkdir(lockedDataDirectory);
+  const lockFile = path.join(lockedDataDirectory, ".bot.lock");
+  await writeFile(
+    lockFile,
+    "1234:00000000-0000-4000-8000-000000000000",
+  );
+  const storageUrl = pathToFileURL(
+    path.resolve("src", "storage.js"),
+  ).href;
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `process.kill = () => { const error = new Error("operation not permitted"); error.code = "EPERM"; throw error; }; import(${JSON.stringify(storageUrl)}).then(({ initializeStorage }) => initializeStorage());`,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, BOT_DATA_DIR: lockedDataDirectory },
+    },
+  );
+
+  assert.equal(child.status, 1);
+  assert.match(child.stderr, /could not verify whether process 1234/);
+  assert.match(child.stderr, /remove \.bot\.lock/);
+  assert.ok((await stat(lockFile)).isFile());
+});
+
 test("stores temporary ban generations and ignores stale expiry records", async () => {
   const oldId = await storage.setTemporaryBan(
     guildId,

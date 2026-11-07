@@ -348,6 +348,12 @@ async function acquireStorageLock() {
       try {
         process.kill(Number(match[1]), 0);
       } catch (processError) {
+        if (processError.code === "EPERM") {
+          throw new Error(
+            `The operating system could not verify whether process ${match[1]} still owns the bot data lock. Check Task Manager or your process monitor for that process; if no bot is running, remove .bot.lock from ${dataDirectory} and restart.`,
+            { cause: processError },
+          );
+        }
         if (processError.code !== "ESRCH") throw processError;
         const current = await readFile(lockFile, "utf8").catch((readError) => {
           if (readError.code === "ENOENT") return null;
